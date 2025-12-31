@@ -1,0 +1,215 @@
+<div class="tab-pane fade <%= (activeTab || "users") === "users" ? "show active" : "" %>"
+     id="pane-users" role="tabpanel" aria-labelledby="tab-users" tabindex="0">
+<% const rolesSafeLocal = Array.isArray(typeof rolesSafe !== "undefined" ? rolesSafe : []) ? rolesSafe : []; %>
+
+
+  <!-- Create User -->
+  <div class="card border-0 shadow-sm rounded-4 mb-4">
+    <div class="card-body p-4">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h2 class="h6 fw-bold mb-0">Create User</h2>
+        <span class="text-muted small">Create accounts for staff</span>
+      </div>
+
+      <form method="POST" action="/management/users/create" class="row g-3">
+        <div class="col-md-4">
+          <label class="form-label">Username</label>
+          <input name="username" class="form-control" required />
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">Password</label>
+          <input name="password" type="password" class="form-control" minlength="6" required />
+          <div class="form-text">Minimum 6 characters</div>
+        </div>
+
+        <div class="col-md-6">
+          <label class="form-label">Company</label>
+          <select name="company_id" class="form-select">
+            <% companiesSafe.forEach(c => { %>
+              <option value="<%= c.id %>"><%= c.short_code %> - <%= c.name %></option>
+            <% }) %>
+          </select>
+        </div>
+
+        <div class="col-md-6">
+          <label class="form-label">Email (optional)</label>
+          <input name="email" type="text" class="form-control" placeholder="optional" />
+        </div>
+
+        <div class="col-12">
+          <button class="btn btn-primary">
+            <i class="bi bi-person-plus me-2"></i>Create
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Users list -->
+  <div class="card border-0 shadow-sm rounded-4">
+    <div class="card-body p-4">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h2 class="h6 fw-bold mb-0">Users</h2>
+        <span class="text-muted small"><%= usersSafe.length %> total</span>
+      </div>
+
+      <div class="table-responsive">
+        <table class="table table-hover align-middle">
+          <thead class="table-light">
+            <tr class="small text-uppercase">
+              <th>ID</th>
+              <th>Company</th>
+              <th>Username</th>
+              <th>Email</th>
+              <th>Status</th>
+              <th>Created</th>
+              <th>Role</th>
+              <th class="text-end">Actions</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            <% usersSafe.forEach(u => { %>
+              <tr>
+                <td><%= u.id %></td>
+                <td>
+                  <%= u.company_id == null ? "—" : (companyMap.get(Number(u.company_id)) || ("#" + u.company_id)) %>
+                </td>
+
+                <td class="fw-semibold"><%= u.username %></td>
+                <td><%= u.email || "—" %></td>
+                <td>
+                  <% if (Number(u.is_active) === 1) { %>
+                    <span class="badge text-bg-success">Active</span>
+                  <% } else { %>
+                    <span class="badge text-bg-secondary">Disabled</span>
+                  <% } %>
+                </td>
+                <td class="small text-muted"><%= u.created_at %></td>
+
+                <td>
+                    <form method="POST" action="/management/users/<%= u.id %>/role" class="d-inline-flex gap-1">
+                        <select name="role_id" class="form-select form-select-sm" style="width: 220px;">
+                        <option value="">— No role —</option>
+                        <% rolesSafe.forEach(r => { %>
+                            <option value="<%= r.id %>" <%= Number(u.role_id) === Number(r.id) ? "selected" : "" %>>
+                            <%= r.code %> — <%= r.name %>
+                            </option>
+                        <% }) %>
+                        </select>
+
+                        <button type="submit" class="btn btn-sm btn-outline-primary">Save</button>
+                    </form>
+                </td>
+
+
+                <td class="text-end">
+                  <div class="d-inline-flex gap-2">
+                    <form method="POST" action="/management/users/<%= u.id %>/toggle">
+                      <button class="btn btn-sm btn-outline-secondary">
+                        <i class="bi bi-toggle-on me-1"></i>Toggle
+                      </button>
+                    </form>
+
+                    <button class="btn btn-sm btn-outline-primary"
+                            data-bs-toggle="modal"
+                            data-bs-target="#editModal-<%= u.id %>">
+                      <i class="bi bi-pencil-square me-1"></i>Edit
+                    </button>
+                  </div>
+
+                  <!-- Edit user modal -->
+                  <div class="modal fade" id="editModal-<%= u.id %>" tabindex="-1">
+                    <div class="modal-dialog modal-lg">
+                      <form method="POST"
+                            action="/management/users/<%= u.id %>/update"
+                            class="modal-content">
+
+                        <div class="modal-header">
+                          <h5 class="modal-title">Edit User: <%= u.username %></h5>
+                          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        </div>
+
+                        <div class="modal-body">
+                          <div class="row g-3">
+
+                            <div class="col-md-6">
+                              <label class="form-label">Username</label>
+                              <input name="username"
+                                     class="form-control"
+                                     value="<%= u.username %>"
+                                     required />
+                            </div>
+
+                            <div class="col-md-6">
+                              <label class="form-label">Email</label>
+                              <input name="email"
+                                     class="form-control"
+                                     value="<%= u.email || '' %>" />
+                            </div>
+
+                            <div class="col-md-6">
+                              <label class="form-label">Company</label>
+                              <select name="company_id" class="form-select">
+                                <option value="" <%= u.company_id == null ? "selected" : "" %>>
+                                  — None (Super Admin) —
+                                </option>
+
+                                <% companiesSafe.forEach(c => { %>
+                                  <option value="<%= c.id %>" <%= Number(u.company_id) === Number(c.id) ? "selected" : "" %>>
+                                    <%= c.short_code %> - <%= c.name %>
+                                  </option>
+                                <% }) %>
+                              </select>
+                            </div>
+
+                            <div class="col-md-6">
+                              <label class="form-label">Status</label>
+                              <select name="is_active" class="form-select">
+                                <option value="1" <%= Number(u.is_active) === 1 ? "selected" : "" %>>Active</option>
+                                <option value="0" <%= Number(u.is_active) === 0 ? "selected" : "" %>>Disabled</option>
+                              </select>
+                            </div>
+
+                            <div class="col-12">
+                              <label class="form-label">New Password (optional)</label>
+                              <input name="password"
+                                     type="password"
+                                     class="form-control"
+                                     minlength="6"
+                                     placeholder="Leave blank to keep current password" />
+                              <div class="form-text">Only update if you want to change the password.</div>
+                            </div>
+
+                          </div>
+                        </div>
+
+                        <div class="modal-footer">
+                          <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+                          <button class="btn btn-primary">
+                            <i class="bi bi-save me-1"></i>Save Changes
+                          </button>
+                        </div>
+
+                      </form>
+                    </div>
+                  </div>
+
+                </td>
+              </tr>
+            <% }) %>
+
+            <% if (usersSafe.length === 0) { %>
+              <tr>
+                <td colspan="7" class="text-center text-muted py-4">No users found.</td>
+              </tr>
+            <% } %>
+          </tbody>
+        </table>
+      </div>
+
+    </div>
+  </div>
+
+</div>

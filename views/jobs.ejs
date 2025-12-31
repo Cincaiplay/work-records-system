@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title><%= title || "Jobs" %></title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" />
+  <link rel="stylesheet" href="/css/styles.css" />
+</head>
+
+<body
+  class="bg-light"
+  data-company-id="<%= user?.company_id ?? '' %>">
+
+  <%- include("partials/navbar", { active: "jobs" }); %>
+
+  <div class="container my-5">
+    <!-- Header -->
+    <div class="d-flex justify-content-between align-items-center mb-4 pb-2 border-bottom">
+      <h1 class="fw-bold text-primary display-6">
+        <i class="bi bi-list-ul me-2"></i> Job Directory
+      </h1>
+      <div class="d-flex gap-2">
+            <button type="button"
+                    class="btn btn-outline-danger btn-lg rounded-pill px-4"
+                    id="bulkDeleteJobsBtn"
+                    onclick="bulkDeleteJobs()"
+                    disabled>
+            <i class="bi bi-trash me-1"></i> Delete Selected
+            </button>
+
+            <button type="button"
+                    class="btn btn-lg btn-success shadow-sm rounded-pill px-4"
+                    onclick="openCreateJobModal()">
+            <i class="bi bi-plus-lg me-1"></i> Add New Job
+            </button>
+        </div>
+    </div>
+
+    <!-- Search / filters -->
+    <div class="row mb-4 align-items-center">
+      <div class="col-lg-8 col-md-12">
+        <div class="input-group shadow-sm rounded-pill overflow-hidden mb-2">
+          <span class="input-group-text bg-white border-0">
+            <i class="bi bi-search"></i>
+          </span>
+          <input type="text"
+                 id="searchJobCode"
+                 class="form-control border-0 py-2"
+                 placeholder="Search by job code..." />
+        </div>
+      </div>
+
+      <div class="col-lg-4 col-md-12 mt-3 mt-lg-0 text-md-start text-lg-end">
+        <button class="btn btn-outline-secondary rounded-pill" disabled title="Later">
+          <i class="bi bi-upload"></i> Import
+        </button>
+        <button class="btn btn-outline-secondary rounded-pill" disabled title="Later">
+          <i class="bi bi-download"></i> Export
+        </button>
+      </div>
+    </div>
+
+    <!-- Jobs table card -->
+    <div class="card shadow-lg border-0 rounded-4">
+      <div class="card-body p-0">
+
+        <!-- TOP pagination + count -->
+        <div class="d-flex justify-content-between align-items-center px-3 py-2 border-bottom bg-light">
+          <small class="text-muted" id="jobsCountTop"></small>
+          <nav>
+            <ul class="pagination pagination-sm mb-0" id="jobsPaginationTop"></ul>
+          </nav>
+        </div>
+
+        <div class="table-responsive">
+          <table class="table table-hover mb-0" id="jobsTable">
+            <thead class="table-primary text-uppercase small">
+              <tr id="jobsHeadRow">
+                    <th style="width: 42px;" class="text-center">
+                        <input class="form-check-input" type="checkbox" id="selectAllJobs" />
+                    </th>
+                    <th>Code</th>
+                    <th>Job Type</th>
+                    <th>Normal</th>
+                    <!-- wage tier columns injected by JS -->
+                    <th class="text-end">Actions</th>
+                </tr>
+            </thead>
+
+            <tbody id="jobsBody">
+              <tr>
+                <td colspan="5" class="text-center text-muted py-5">
+                  <div class="spinner-border spinner-border-sm me-2 text-primary" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                  </div>
+                  Loading job data...
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- BOTTOM pagination + count -->
+        <div class="d-flex justify-content-between align-items-center px-3 py-2 border-top bg-light">
+          <small class="text-muted" id="jobsCountBottom"></small>
+          <nav>
+            <ul class="pagination pagination-sm mb-0" id="jobsPagination"></ul>
+          </nav>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- Job Modal (Create/Edit) -->
+  <div class="modal fade" id="jobModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl">
+      <div class="modal-content rounded-3">
+        <div class="modal-header">
+          <h5 class="modal-title" id="jobModalTitle">Job</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+
+        <div class="modal-body">
+          <form id="jobForm">
+            <input type="hidden" id="jobId" />
+
+            <div class="row g-3">
+              <div class="col-md-3">
+                <label class="form-label">Job Code</label>
+                <input type="text" id="jobCode" class="form-control" />
+              </div>
+
+              <div class="col-md-9">
+                <label class="form-label">Job Type / Description</label>
+                <input type="text" id="jobType" class="form-control" />
+              </div>
+
+              <div class="col-md-3">
+                <label class="form-label">Normal Price</label>
+                <input type="number" step="0.01" id="normalPrice" class="form-control" />
+              </div>
+
+              <div class="col-md-3">
+                <label class="form-label">Active</label>
+                <select id="isActive" class="form-select">
+                  <option value="1" selected>Yes</option>
+                  <option value="0">No</option>
+                </select>
+              </div>
+
+              <div class="col-12">
+                <label class="form-label">Wage Rates by Tier</label>
+                <div id="wageRatesContainer" class="row g-3"></div>
+                <div class="form-text">
+                  These wages follow the company wage tiers (tier name can be renamed anytime).
+                </div>
+              </div>
+            </div>
+
+          </form>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="button" class="btn btn-primary" onclick="saveJob()">Save</button>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="/js/company-switcher.js"></script>
+  <script src="/js/jobs.js"></script>
+</body>
+</html>

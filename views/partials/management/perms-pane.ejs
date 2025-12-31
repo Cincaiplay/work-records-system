@@ -1,0 +1,185 @@
+<div class="tab-pane fade <%= activeTab === "perms" ? "show active" : "" %>"
+     id="pane-perms" role="tabpanel" aria-labelledby="tab-perms" tabindex="0">
+
+
+  <!-- Create Permission -->
+  <div class="card border-0 shadow-sm rounded-4 mb-4">
+    <div class="card-body p-4">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h2 class="h6 fw-bold mb-0">Create Permission</h2>
+        <span class="text-muted small">Global permission list</span>
+      </div>
+
+      <form method="POST" action="/management/permissions/create" class="row g-3">
+        <div class="col-md-5">
+          <label class="form-label">Permission Code</label>
+          <input name="code" class="form-control" placeholder="e.g. USERS_EDIT" required />
+        </div>
+
+        <div class="col-md-7">
+          <label class="form-label">Description</label>
+          <input name="description" class="form-control" placeholder="e.g. Edit users in management page" />
+        </div>
+
+        <div class="col-12">
+          <button class="btn btn-outline-primary">
+            <i class="bi bi-plus-circle me-2"></i>Create Permission
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Permissions list -->
+  <div class="card border-0 shadow-sm rounded-4">
+    <div class="card-body p-4">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <div>
+          <h2 class="h6 fw-bold mb-0">Permissions</h2>
+          <div class="text-muted small">
+            Showing <%= permsSafe.length %> of <%= permTotal || permsSafe.length %>
+          </div>
+        </div>
+
+        <div class="d-flex gap-2 align-items-center">
+          <span class="text-muted small">Rows</span>
+          <form method="GET" action="/management" class="m-0">
+            <input type="hidden" name="tab" value="perms" />
+            <input type="hidden" name="permPage" value="1" />
+
+            <select name="permPageSize"
+                    class="form-select form-select-sm"
+                    onchange="this.form.submit()"
+                    style="width:auto;">
+              <% [5,10,20,50].forEach(sz => { %>
+                <option value="<%= sz %>" <%= Number(permPageSize) === sz ? "selected" : "" %>><%= sz %></option>
+              <% }) %>
+            </select>
+          </form>
+        </div>
+      </div>
+
+      <div class="table-responsive">
+        <table class="table table-hover align-middle">
+          <thead class="table-light">
+            <tr class="small text-uppercase">
+                <th style="width: 90px;">ID</th>
+                <th style="width: 260px;">Code</th>
+                <th>Description</th>
+                <th style="width: 140px;">Status</th>
+                <th class="text-end" style="width: 140px;">Actions</th>
+            </tr>
+            </thead>
+
+            <tbody>
+            <% permsSafe.forEach(p => { %>
+                <tr class="<%= Number(p.is_active) === 1 ? '' : 'table-secondary' %>">
+                    <td><%= p.id %></td>
+                    <td class="fw-semibold"><%= p.code %></td>
+                    <td class="text-muted small"><%= p.description || "—" %></td>
+                    <td>
+                        <% if (Number(p.is_active) === 1) { %>
+                        <span class="badge text-bg-success">Active</span>
+                        <% } else { %>
+                        <span class="badge text-bg-secondary">Inactive</span>
+                        <% } %>
+                    </td>
+                    <td class="text-end">
+                        <div class="d-inline-flex gap-1 align-items-center">
+                            <form method="POST" action="/management/permissions/<%= p.id %>/toggle">
+                            <button type="submit"
+                                    class="btn btn-sm <%= Number(p.is_active) === 1 ? 'btn-outline-secondary' : 'btn-outline-success' %>">
+                                <%= Number(p.is_active) === 1 ? 'Deactivate' : 'Activate' %>
+                            </button>
+                            </form>
+
+                            <% if (Number(p.is_active) === 0) { %>
+                            <form method="POST" action="/management/permissions/<%= p.id %>/delete">
+                                <button type="submit"
+                                        class="btn btn-sm btn-outline-danger"
+                                        onclick="return confirm('Delete permission <%= p.code %>? This is permanent.');">
+                                Delete
+                                </button>
+                            </form>
+                            <% } %>
+                        </div>
+                    </td>
+                </tr>
+            <% }) %>
+            </tbody>
+
+        </table>
+      </div>
+
+      <!-- Pagination -->
+      <% const pPage = Number(permPage || 1); %>
+      <% const pPages = Number(permTotalPages || 1); %>
+      <% const pSize = Number(permPageSize || 10); %>
+
+      <div class="d-flex justify-content-between align-items-center mt-3">
+        <div class="text-muted small">
+          Page <%= pPage %> of <%= pPages %>
+        </div>
+
+        <% if (pPages > 1) { %>
+          <nav aria-label="Permission pagination">
+            <ul class="pagination pagination-sm mb-0">
+
+              <li class="page-item <%= pPage <= 1 ? "disabled" : "" %>">
+                <a class="page-link"
+                   href="/management?tab=perms&permPage=<%= Math.max(1, pPage - 1) %>&permPageSize=<%= pSize %>">
+                  Prev
+                </a>
+              </li>
+
+              <%
+                const windowSize = 5;
+                let start = Math.max(1, pPage - 2);
+                let end = Math.min(pPages, start + windowSize - 1);
+                start = Math.max(1, end - windowSize + 1);
+              %>
+
+              <% if (start > 1) { %>
+                <li class="page-item">
+                  <a class="page-link" href="/management?tab=perms&permPage=1&permPageSize=<%= pSize %>">1</a>
+                </li>
+                <% if (start > 2) { %>
+                  <li class="page-item disabled"><span class="page-link">…</span></li>
+                <% } %>
+              <% } %>
+
+              <% for (let i = start; i <= end; i++) { %>
+                <li class="page-item <%= i === pPage ? "active" : "" %>">
+                  <a class="page-link"
+                     href="/management?tab=perms&permPage=<%= i %>&permPageSize=<%= pSize %>">
+                    <%= i %>
+                  </a>
+                </li>
+              <% } %>
+
+              <% if (end < pPages) { %>
+                <% if (end < pPages - 1) { %>
+                  <li class="page-item disabled"><span class="page-link">…</span></li>
+                <% } %>
+                <li class="page-item">
+                  <a class="page-link" href="/management?tab=perms&permPage=<%= pPages %>&permPageSize=<%= pSize %>">
+                    <%= pPages %>
+                  </a>
+                </li>
+              <% } %>
+
+              <li class="page-item <%= pPage >= pPages ? "disabled" : "" %>">
+                <a class="page-link"
+                   href="/management?tab=perms&permPage=<%= Math.min(pPages, pPage + 1) %>&permPageSize=<%= pSize %>">
+                  Next
+                </a>
+              </li>
+
+            </ul>
+          </nav>
+        <% } %>
+      </div>
+
+    </div>
+  </div>
+</div>

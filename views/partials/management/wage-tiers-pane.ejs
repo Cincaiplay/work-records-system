@@ -1,0 +1,117 @@
+<div class="tab-pane fade <%= activeTab === "wage_tiers" ? "show active" : "" %>"
+     id="pane-wage-tiers" role="tabpanel" tabindex="0">
+    <% const wageTiersSafe = Array.isArray(wageTiers) ? wageTiers : []; %>
+
+  <!-- Create wage tier -->
+  <div class="card border-0 shadow-sm rounded-4 mb-4">
+    <div class="card-body p-4">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h2 class="h6 fw-bold mb-0">Create Wage Tier</h2>
+        <span class="text-muted small">Per company</span>
+      </div>
+
+      <form method="POST" action="/management/wage-tiers/create" class="row g-3">
+        <div class="col-md-4">
+          <label class="form-label">Company</label>
+          <select name="company_id" class="form-select" required>
+            <% companiesSafe.forEach(c => { %>
+              <option value="<%= c.id %>"><%= c.short_code %> - <%= c.name %></option>
+            <% }) %>
+          </select>
+        </div>
+
+        <div class="col-md-3">
+          <label class="form-label">Tier Code</label>
+          <input name="tier_code" class="form-control" placeholder="e.g. T1" required />
+          <div class="form-text">Stable key (don’t change later).</div>
+        </div>
+
+        <div class="col-md-3">
+          <label class="form-label">Tier Name</label>
+          <input name="tier_name" class="form-control" placeholder="e.g. Senior" required />
+        </div>
+
+        <div class="col-md-2">
+          <label class="form-label">Sort</label>
+          <input name="sort_order" type="number" class="form-control" value="0" />
+        </div>
+
+        <div class="col-12">
+          <button class="btn btn-primary">
+            <i class="bi bi-plus-circle me-2"></i>Create Tier
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- List wage tiers -->
+  <div class="card border-0 shadow-sm rounded-4">
+    <div class="card-body p-4">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h2 class="h6 fw-bold mb-0">Wage Tiers</h2>
+        <span class="text-muted small"><%= (wageTiers || []).length %> total</span>
+      </div>
+
+      <div class="table-responsive">
+        <table class="table table-hover align-middle">
+          <thead class="table-light">
+            <tr class="small text-uppercase">
+              <th>ID</th>
+              <th>Company</th>
+              <th>Code</th>
+              <th>Name</th>
+              <th>Sort</th>
+              <th>Status</th>
+              <th class="text-end">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <% (wageTiers || []).forEach(t => { %>
+              <tr>
+                <td><%= t.id %></td>
+                <td><%= companyMap.get(Number(t.company_id)) || ("#" + t.company_id) %></td>
+                <td class="fw-semibold"><%= t.tier_code %></td>
+                <td><%= t.tier_name %></td>
+                <td><%= t.sort_order %></td>
+                <td>
+                  <% if (Number(t.is_active) === 1) { %>
+                    <span class="badge text-bg-success">Active</span>
+                  <% } else { %>
+                    <span class="badge text-bg-secondary">Inactive</span>
+                  <% } %>
+                </td>
+                <td class="text-end">
+                  <div class="d-inline-flex gap-2">
+                    <form method="POST" action="/management/wage-tiers/<%= t.id %>/toggle" class="d-inline">
+                      <button class="btn btn-sm <%= Number(t.is_active) === 1 ? "btn-outline-secondary" : "btn-outline-success" %>">
+                        <%= Number(t.is_active) === 1 ? "Deactivate" : "Activate" %>
+                      </button>
+                    </form>
+
+                    <% if (Number(t.is_active) === 0) { %>
+                      <form method="POST" action="/management/wage-tiers/<%= t.id %>/delete" class="d-inline">
+                        <button class="btn btn-sm btn-outline-danger"
+                                onclick="return confirm('Delete wage tier <%= t.tier_code %> – <%= t.tier_name %>? This is permanent.');">
+                          Delete
+                        </button>
+                      </form>
+                    <% } %>
+                  </div>
+                </td>
+              </tr>
+            <% }) %>
+
+            <% if (!(wageTiers || []).length) { %>
+              <tr>
+                <td colspan="7" class="text-center text-muted py-4">No wage tiers found.</td>
+              </tr>
+            <% } %>
+          </tbody>
+        </table>
+      </div>
+
+    </div>
+  </div>
+
+</div>

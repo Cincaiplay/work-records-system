@@ -1,0 +1,118 @@
+<nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-4">
+
+    <div class="container">
+        <!-- Brand -->
+        <a class="navbar-brand fw-bold" href="/dashboard">
+            Payroll Tracker
+        </a>
+
+        <!-- Company selector (always visible) -->
+        <% if (user && Number(user.is_admin) === 1) { %>
+            <form class="d-flex align-items-center ms-3">
+                <select id="companySelect" class="form-select form-select-sm">
+                <option value="" disabled selected>Loading...</option>
+                </select>
+            </form>
+        <% } %>
+
+
+        <!-- Mobile button -->
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarMain">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+
+        <!-- Menu -->
+        <div class="collapse navbar-collapse" id="navbarMain">
+            <ul class="navbar-nav ms-auto">
+                <% if( isAdmin || permissions.includes("PAGE_DASHBOARD")) { %>
+                <li class="nav-item">
+                    <a class="nav-link <%= active === 'dashboard' ? 'active' : '' %>" href="/dashboard">Dashboard</a>
+                </li>
+                <% } %>
+
+                <% if( isAdmin || permissions.includes("PAGE_WORKERS")) { %>
+                <li class="nav-item">
+                    <a class="nav-link <%= active === 'workers' ? 'active' : '' %>" href="/workers">Workers</a>
+                </li>
+                <% } %>
+
+                <% if( isAdmin || permissions.includes("PAGE_JOBS")) { %>
+                <li class="nav-item">
+                    <a class="nav-link <%= active === 'jobs' ? 'active' : '' %>" href="/jobs">Jobs</a>
+                </li>
+                <% } %>
+
+                <% if( isAdmin || permissions.includes("PAGE_COMPANIES")) { %>
+                <li class="nav-item">
+                    <a class="nav-link <%= active === 'companies' ? 'active' : '' %>" href="/companies">Companies</a>
+                </li>
+                <% } %>
+
+                <% if( isAdmin || permissions.includes("PAGE_RECORDS")) { %>
+                <li class="nav-item">
+                    <a class="nav-link <%= active === 'records' ? 'active' : '' %>" href="/records">Records</a>
+                </li>
+                <% } %>
+
+                <% if( isAdmin || permissions.includes("PAGE_REPORTS")) { %>
+                <li class="nav-item">
+                    <a class="nav-link <%= active === 'reports' ? 'active' : '' %>" href="/reports">Reports</a>
+                </li>
+                <% } %>
+
+                
+                <li class="nav-item dropdown ms-lg-2">
+                    <a
+                        class="nav-link dropdown-toggle d-flex align-items-center"
+                        href="#"
+                        role="button"
+                        data-bs-toggle="dropdown"
+                        aria-expanded="false"
+                    >
+                        <i class="bi bi-person-circle me-2"></i>
+                        <%= user?.username || "Account" %>
+                    </a>
+
+                    <ul class="dropdown-menu dropdown-menu-end">
+                        <!-- <li class="px-3 py-2">
+                            <div class="small text-muted">Signed in as</div>
+                            <div class="fw-semibold"><%= user?.username || "Account" %></div>
+                        </li>
+
+                        <li><hr class="dropdown-divider"></li> -->
+
+
+                        <li><h6 class="dropdown-header">Account</h6></li>
+                        
+                        <% if (can("PAGE_MANAGEMENT")) { %>
+                        <li>
+                        <a class="dropdown-item" href="/management">
+                            <i class="bi bi-shield-lock me-2"></i> Management
+                        </a>
+                        </li>
+                        <% } %>
+
+                        <!-- <li>
+                        <a class="dropdown-item" href="/settings">
+                            <i class="bi bi-gear me-2"></i> Settings
+                        </a>
+                        </li> -->
+
+                        <li><hr class="dropdown-divider"></li>
+
+                        <li>
+                        <form method="POST" action="/logout">
+                            <button type="submit" class="dropdown-item text-danger">
+                                <i class="bi bi-box-arrow-right me-2"></i> Logout
+                            </button>
+                        </form>
+
+                        </li>
+                    </ul>
+                </li>
+
+            </ul>
+
+        </div>
+    </div>
+</nav>
