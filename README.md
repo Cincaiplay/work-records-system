@@ -1,86 +1,59 @@
 # Work Records & Payroll Management System
 
-A multi-company work records, payroll, and reporting system built with **Node.js**, **Express**, and **SQLite**, designed for service-based businesses (e.g. reflexology, massage, salons).
+A full-stack web application designed to manage **daily work records, payroll calculation, and reporting** for small service-based businesses.
 
-This system supports:
-- Worker job recording
-- Tier-based wage calculation
-- Cash / bank payment tracking
+This project focuses on **real-world business workflows** such as tier-based wages, cash vs bank payments, multi-company support, and role-based access control.
+
+---
+
+## Key Features
+
+- Worker & job management
+- Tier-based wage calculation (per job & per worker)
+- Daily work entry recording with customer fees tracking
+- Cash / bank payment separation
+- Monthly payroll and sales records
+- PDF report export
 - Role-based access control (RBAC)
-- Detailed reports with PDF export
-
----
-
-## 🚀 Features
-
-### Core
 - Multi-company support
-- User authentication & authorization
-- Role-based permissions (Admin / Manager / Staff)
-- Company-level data isolation
-
-### Workers & Jobs
-- Worker management with wage tier assignment
-- Job management per company
-- Job-specific wage rates by tier
-
-### Work Entries
-- Record daily work entries
-- Supports:
-  - Job No 1 / Job No 2
-  - Cash / Bank payment type
-  - Customer rate & total
-  - Wage tier snapshot & wage total
-  - Fees collected (tips / extra charges)
-  - Notes
-- Historical data preserved even if rates change
-
-### Reports
-- Worker Monthly Pays
-- Daily Sales Listing
-- Worker Job Listing
-- Filters:
-  - Date range
-  - Cash / Bank (permission-based)
-  - Job No 1 / Job No 2
-- PDF export supported
-
-### Security & Permissions
-- RBAC system (roles + permissions)
-- Fine-grained permission overrides
-- Company & user-specific access rules
 
 ---
 
-## 🧱 Tech Stack
+## Why This Project
 
-| Layer | Technology |
-|-----|-----------|
-| Backend | Node.js, Express |
-| Database | SQLite |
-| Auth | Session-based |
-| PDF | PDFKit |
-| Frontend | EJS, Bootstrap 5 |
-| ORM | Raw SQLite (sqlite3) |
+This system was built to solve common issues in small service businesses:
+- Manual payroll calculation errors
+- Lack of transparency between collected fees and wages
+- No clear separation of cash and bank transactions
+- Difficulty generating monthly summaries for management
+
+The application emphasizes **data consistency**, **auditability**, and **permission-based access**.
 
 ---
 
-## 🗄️ Database Overview
+## Tech Stack
 
-Main tables:
+- **Backend:** Node.js, Express
+- **Database:** SQLite (relational schema with migrations)
+- **Frontend:** EJS, Bootstrap 5
+- **Auth & Security:** Session-based auth, RBAC
+- **Reporting:** PDF generation
 
-- `companies`
-- `users`
-- `roles`, `permissions`, `role_permissions`
-- `workers`
-- `jobs`
-- `wage_tiers`
-- `job_wages`
-- `work_entries`
-- `rules`, `company_rules`
+---
 
-Key design principles:
-- Snapshot-based accounting (rates stored at entry time)
-- Strict foreign keys
-- Multi-company safe by default
+## Architecture Highlights
 
+- Relational database design with foreign key constraints
+- Snapshot-based wage calculation (historical accuracy)
+- Centralized permission middleware
+- Company-scoped data access
+- Separation between business rules and presentation logic
+
+---
+
+## Getting Started
+
+```bash
+npm install
+node src/db/seed.js
+npm start
