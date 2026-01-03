@@ -57,3 +57,26 @@ The application emphasizes **data consistency**, **auditability**, and **permiss
 npm install
 node src/db/seed.js
 npm start
+```
+
+---
+
+## Demo Accounts
+
+After running the seed script, you can log in with these default accounts (password: `123123`):
+
+- **Admin (system-wide)**
+  - Username: `admin`
+  - Email: `admin@example.com`
+  - Access: Full access across the system (super admin)
+
+- **Manager (company-scoped)**
+  - Username: `manager`
+  - Email: `manager@example.com`
+  - Access: Manage workers, jobs, work records, reports, and users within the default company
+
+- **Staff (company-scoped)**
+  - Username: `staff`
+  - Email: `staff@example.com`
+  - Access: Record work entries, view operational pages, export PDF reports (limited permissions)
+
