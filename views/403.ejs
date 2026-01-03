@@ -56,11 +56,12 @@
                 <hr class="my-4" />
 
                 <div class="text-muted small">
-                  If you believe this is a mistake, contact an admin and include:
-                  <div class="mt-2">
-                    <code><%= missingPermission %></code>
-                  </div>
+                    If you believe this is a mistake, contact an admin and include:
+                    <div class="mt-2">
+                        <code><%= (typeof missingPermission === "string" && missingPermission) ? missingPermission : "N/A" %></code>
+                    </div>
                 </div>
+
 
               </div>
             </div>

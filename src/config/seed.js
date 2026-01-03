@@ -1,9 +1,9 @@
 // src/db/seed.js
 import db from "../config/db.js";
+import bcrypt from "bcrypt";
 
 /**
  * Run: node src/db/seed.js
- * (Or add npm script: "seed": "node src/db/seed.js")
  *
  * Seeds:
  * - companies (default)
@@ -12,7 +12,7 @@ import db from "../config/db.js";
  * - permissions
  * - roles (global)
  * - role_permissions (super_admin = all, manager/staff curated)
- * - users (default admin + sample manager/staff) + user_roles
+ * - users (admin + manager/staff) + user_roles + users.role_id sync
  */
 
 function run(sql, params = []) {
@@ -33,15 +33,9 @@ function get(sql, params = []) {
   });
 }
 
-function all(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => {
-      if (err) return reject(err);
-      resolve(rows || []);
-    });
-  });
-}
-
+/* -----------------------------
+   Company
+------------------------------ */
 async function ensureDefaultCompany() {
   const row = await get(`SELECT id FROM companies ORDER BY id LIMIT 1`);
   if (row?.id) return row.id;
@@ -54,8 +48,10 @@ async function ensureDefaultCompany() {
   return r.lastID;
 }
 
+/* -----------------------------
+   Wage tiers
+------------------------------ */
 async function ensureWageTiers(companyId) {
-  // tier_code is the stable key
   const tiers = [
     ["T1", "Tier 1", 10],
     ["T2", "Tier 2", 20],
@@ -71,6 +67,9 @@ async function ensureWageTiers(companyId) {
   }
 }
 
+/* -----------------------------
+   Rules
+------------------------------ */
 async function seedRules() {
   const rules = [
     [
@@ -97,7 +96,6 @@ async function seedRules() {
 }
 
 async function ensureCompanyRules(companyId) {
-  // Enable default rules for the company (and keep existing untouched)
   await run(
     `
     INSERT OR IGNORE INTO company_rules (company_id, rule_code, enabled)
@@ -109,10 +107,11 @@ async function ensureCompanyRules(companyId) {
   );
 }
 
+/* -----------------------------
+   Permissions
+------------------------------ */
 async function seedPermissions() {
-  // Keep permission codes stable (used in code checks)
   const permissions = [
-    // Navigation / page visibility
     ["PAGE_DASHBOARD", "Can access Dashboard page"],
     ["PAGE_WORKERS", "Can access Workers page"],
     ["PAGE_JOBS", "Can access Jobs page"],
@@ -122,41 +121,32 @@ async function seedPermissions() {
     ["PAGE_USERS", "Can access Users/Accounts page (admin)"],
     ["PAGE_ROLES", "Can access Roles/Permissions page (admin)"],
 
-    // CRUD Workers
     ["WORKER_CREATE", "Can create workers"],
     ["WORKER_EDIT", "Can edit workers"],
     ["WORKER_DELETE", "Can delete workers"],
 
-    // CRUD Jobs
     ["JOB_CREATE", "Can create jobs"],
     ["JOB_EDIT", "Can edit jobs"],
     ["JOB_DELETE", "Can delete jobs"],
 
-    // Work entries
     ["WORK_ENTRY_CREATE", "Can create work entries"],
     ["WORK_ENTRY_EDIT", "Can edit work entries"],
     ["WORK_ENTRY_DELETE", "Can delete work entries"],
     ["WORK_ENTRY_VIEW_ALL_DATES", "Can view work entries without date limit"],
 
-    // Reports
     ["REPORT_EXPORT_PDF", "Can export reports as PDF"],
     ["REPORT_EXPORT_EXCEL", "Can export reports as Excel"],
-
-    // Report filters
     ["REPORT_FILTER_PAYTYPE", "Can filter reports by Cash/Bank"],
 
-    // User admin
     ["USER_CREATE", "Can create users"],
     ["USER_EDIT", "Can edit users"],
     ["USER_DEACTIVATE", "Can activate/deactivate users"],
 
-    // Role admin
     ["ROLE_CREATE", "Can create roles"],
     ["ROLE_EDIT", "Can edit roles"],
     ["ROLE_ASSIGN", "Can assign roles to users"],
     ["PERMISSION_ASSIGN", "Can assign permissions to roles/users"],
 
-    // Company admin
     ["COMPANY_CREATE", "Can create companies"],
     ["COMPANY_EDIT", "Can edit companies"],
   ];
@@ -170,8 +160,10 @@ async function seedPermissions() {
   }
 }
 
+/* -----------------------------
+   Roles
+------------------------------ */
 async function seedRoles() {
-  // company_id NULL = global/system roles
   const roles = [
     [null, "super_admin", "Super Admin", "System owner: full access across companies", null],
     [null, "manager", "Manager", "Company manager: manage data within their company", null],
@@ -214,19 +206,18 @@ async function grant(roleCode, permissionCodes) {
 }
 
 async function seedRolePermissions() {
-  // super_admin gets everything
   const superRoleId = await roleIdByCode("super_admin");
   if (superRoleId) {
     await run(
       `
       INSERT OR IGNORE INTO role_permissions (role_id, permission_id)
-      SELECT ?, p.id FROM permissions p
+      SELECT ?, p.id
+      FROM permissions p
       `,
       [superRoleId]
     );
   }
 
-  // manager
   await grant("manager", [
     "PAGE_DASHBOARD",
     "PAGE_WORKERS",
@@ -254,7 +245,6 @@ async function seedRolePermissions() {
     "USER_DEACTIVATE",
   ]);
 
-  // staff
   await grant("staff", [
     "PAGE_DASHBOARD",
     "PAGE_WORKERS",
@@ -267,25 +257,36 @@ async function seedRolePermissions() {
   ]);
 }
 
+/* -----------------------------
+   Users + role assignment
+   IMPORTANT: permission.js uses users.role_id
+------------------------------ */
 async function ensureUser({
-  companyId,
+  companyId = null,
   username,
   email,
   password_hash,
   is_admin = 0,
   is_active = 1,
+  roleCode = null,
 }) {
-  // If exists, return id
-  const row = await get(`SELECT id FROM users WHERE username = ?`, [username]);
-  if (row?.id) return row.id;
+  const existing = await get(`SELECT id FROM users WHERE username = ?`, [username]);
+  const roleId = roleCode ? await roleIdByCode(roleCode) : null;
 
-  // IMPORTANT: this expects you store password_hash already (bcrypt hash)
-  // For dev seeding, you can store a placeholder and change it later.
+  if (existing?.id) {
+    // keep role_id synced
+    if (roleId) await run(`UPDATE users SET role_id = ? WHERE id = ?`, [roleId, existing.id]);
+    // keep company_id synced if you changed it
+    await run(`UPDATE users SET company_id = ? WHERE id = ?`, [companyId, existing.id]);
+    return existing.id;
+  }
+
   const r = await run(
-    `INSERT INTO users (company_id, username, email, password_hash, is_active, is_admin)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [companyId, username, email, password_hash, is_active, is_admin]
+    `INSERT INTO users (company_id, username, email, password_hash, is_active, is_admin, role_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [companyId, username, email, password_hash, is_active, is_admin, roleId]
   );
+
   return r.lastID;
 }
 
@@ -293,6 +294,10 @@ async function assignRoleToUser(userId, roleCode) {
   const roleId = await roleIdByCode(roleCode);
   if (!roleId) throw new Error(`Role not found: ${roleCode}`);
 
+  // legacy sync for permission.js
+  await run(`UPDATE users SET role_id = ? WHERE id = ?`, [roleId, userId]);
+
+  // mapping table for future RBAC upgrade
   await run(
     `INSERT OR IGNORE INTO user_roles (user_id, role_id)
      VALUES (?, ?)`,
@@ -300,41 +305,45 @@ async function assignRoleToUser(userId, roleCode) {
   );
 }
 
-async function seedDefaultUsers(companyId) {
-  // NOTE: Replace these hashes with real bcrypt hashes from your auth flow.
-  // Example (bcrypt hash for "admin123" etc). Put real hashes here.
-  const DEV_HASH = "$2b$10$CwTycUXWue0Thq9StjUM0uJ8bV3k1QdQp8m6cQwNqf1wQfYb3l2mK"; // placeholder
+async function seedDefaultUsers(defaultCompanyId) {
+  const DEV_HASH = await bcrypt.hash("123123", 10);
 
+  // ✅ admin has NO company
   const adminId = await ensureUser({
-    companyId,
+    companyId: null,
     username: "admin",
     email: "admin@example.com",
     password_hash: DEV_HASH,
     is_admin: 1,
+    roleCode: "super_admin",
   });
 
   const managerId = await ensureUser({
-    companyId,
+    companyId: defaultCompanyId,
     username: "manager",
     email: "manager@example.com",
     password_hash: DEV_HASH,
     is_admin: 0,
+    roleCode: "manager",
   });
 
   const staffId = await ensureUser({
-    companyId,
+    companyId: defaultCompanyId,
     username: "staff",
     email: "staff@example.com",
     password_hash: DEV_HASH,
     is_admin: 0,
+    roleCode: "staff",
   });
 
-  // Role mapping
   await assignRoleToUser(adminId, "super_admin");
   await assignRoleToUser(managerId, "manager");
   await assignRoleToUser(staffId, "staff");
 }
 
+/* -----------------------------
+   Main
+------------------------------ */
 async function main() {
   try {
     const companyId = await ensureDefaultCompany();
