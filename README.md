@@ -55,6 +55,7 @@ The application emphasizes **data consistency**, **auditability**, and **permiss
 
 ```bash
 npm install
+node src/db/db.js
 node src/db/seed.js
 npm start
 ```
