@@ -7,7 +7,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // DB file (project-root/data.sqlite)
-const dbPath = path.join(__dirname, "../../data.sqlite");
+const dbPath =
+  process.env.DB_PATH
+    ? process.env.DB_PATH
+    : path.join(__dirname, "../../data.sqlite");
 
 const db = new sqlite3.Database(dbPath, (err) => {
   if (err) {

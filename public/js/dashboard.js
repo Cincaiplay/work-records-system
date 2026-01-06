@@ -55,6 +55,26 @@ function applyRatesVisibility() {
   fixColspans();
 }
 
+async function loadCompanyTitle() {
+  const companyId = getCompanyId();
+  const el = $("companyTitle");
+  if (!el) return;
+
+  if (!companyId) {
+    el.textContent = "Dashboard";
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/companies/${companyId}`);
+    const c = await res.json().catch(() => ({}));
+    el.textContent = c?.name || "Dashboard";
+  } catch (e) {
+    el.textContent = "Dashboard";
+  }
+}
+
+
 function fixColspans() {
   const tbody = $("workEntriesBody");
   const table = tbody?.closest("table");
@@ -168,12 +188,32 @@ async function loadWorkers() {
     opt.textContent = `${w.worker_code} – ${w.worker_name}`;
     select.appendChild(opt);
   });
+
+  if (hotBatch) {
+    const cols = hotBatch.getSettings().columns || [];
+    const workerCol = cols[3] || {};
+    hotBatch.updateSettings({
+      columns: cols.map((c, i) =>
+        i === 3
+          ? {
+              ...workerCol,
+              type: "dropdown",
+              strict: false,
+              allowInvalid: true,
+              source: (q, cb) => cb((allWorkers || []).map((w) => w.worker_code)),
+            }
+          : c
+      ),
+    });
+    hotBatch.render();
+  }
 }
 
 // ---------- DOMContentLoaded ----------
 document.addEventListener("DOMContentLoaded", async () => {
   // ✅ IMPORTANT: wait for admin company-switcher to set localStorage + session
   if (window.companyReady) await window.companyReady;
+  await loadCompanyTitle();
 
   const companyId = getCompanyId();
   if (!companyId) console.warn("No companyId available yet.");
@@ -389,6 +429,7 @@ function initHotBatch(rowCount = 10) {
   hotBatch = new Handsontable(container, {
     data,
     rowHeaders: true,
+    colWidths: [110, 60, 60, 160, 180, 50, 70, 70, 90, 70, 230],
     colHeaders: [
       "Date",
       "Job No1",
@@ -396,17 +437,23 @@ function initHotBatch(rowCount = 10) {
       "Worker Code",
       "Job Type",
       "Hours",
-      "CustomCustomerRate",
-      "CustomWage",
-      "IsBank(y/n)",
+      "CustRate",
+      "Wage",
       "Fees Collected",
+      "Bank(y/n)",
       "Note",
     ],
     columns: [
       { data: 0, type: "date", dateFormat: "YYYY-MM-DD", correctFormat: true, allowInvalid: true },
       { data: 1, type: "text" },
       { data: 2, type: "text" },
-      { data: 3, type: "text" },
+      {
+        data: 3,
+        type: "dropdown",
+        strict: false,
+        allowInvalid: true,
+        source: (q, cb) => cb((allWorkers || []).map((w) => w.worker_code)),
+      },
       {
         data: 4,
         type: "dropdown",
@@ -417,23 +464,23 @@ function initHotBatch(rowCount = 10) {
       { data: 5, type: "numeric", numericFormat: { pattern: "0.0" } },
       { data: 6, type: "numeric", numericFormat: { pattern: "0.00" } },
       { data: 7, type: "numeric", numericFormat: { pattern: "0.00" } },
+      { data: 8, type: "numeric", numericFormat: { pattern: "0.00" } },
       {
-        data: 8,
+        data: 9,
         type: "text",
         validator: (value, cb) => {
           const v = norm(value).toUpperCase();
           cb(v === "" || v === "Y" || v === "N");
         },
       },
-      { data: 9, type: "numeric", numericFormat: { pattern: "0.00" } },
       { data: 10, type: "text" },
     ],
     afterChange: (changes, source) => {
       if (!changes || source === "bankUpper") return;
       for (const [row, prop, , newVal] of changes) {
-        if (prop === 8 || prop === "8") {
+        if (prop === 9 || prop === "9") {
           const v = norm(newVal).toUpperCase();
-          if (v !== newVal) hotBatch.setDataAtCell(row, 8, v, "bankUpper");
+          if (v !== newVal) hotBatch.setDataAtCell(row, 9, v, "bankUpper");
         }
       }
     },
@@ -484,11 +531,11 @@ window.addBatchRowsToPending = async function () {
 
     const customCustomerRate = parseFloat(row[6]);
     const customWageRate = parseFloat(row[7]);
+    const fees_collected = toMoney0(row[8]);
 
-    const bankRaw = norm(row[8]).toLowerCase();
+    const bankRaw = norm(row[9]).toLowerCase();
     const is_bank = bankRaw === "y" ? 1 : 0;
 
-    const fees_collected = toMoney0(row[9]);
     const note = norm(row[10]);
 
     if (!work_date || !/^\d{4}-\d{2}-\d{2}$/.test(work_date)) {

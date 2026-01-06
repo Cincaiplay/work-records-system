@@ -82,14 +82,17 @@
                         <li><hr class="dropdown-divider"></li> -->
 
 
-                        <li><h6 class="dropdown-header">Account</h6></li>
                         
                         <% if (can("PAGE_MANAGEMENT")) { %>
+                        <li><h6 class="dropdown-header">Account</h6></li>
+
                         <li>
                         <a class="dropdown-item" href="/management">
                             <i class="bi bi-shield-lock me-2"></i> Management
                         </a>
                         </li>
+
+                        <li><hr class="dropdown-divider"></li>
                         <% } %>
 
                         <!-- <li>
@@ -98,7 +101,6 @@
                         </a>
                         </li> -->
 
-                        <li><hr class="dropdown-divider"></li>
 
                         <li>
                         <form method="POST" action="/logout">

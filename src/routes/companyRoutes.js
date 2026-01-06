@@ -21,6 +21,29 @@ router.get("/", (req, res) => {
   );
 });
 
+// GET company details
+router.get("/:id", (req, res) => {
+  const companyId = Number(req.params.id);
+  if (!Number.isFinite(companyId) || companyId <= 0) {
+    return res.status(400).json({ error: "Invalid company id" });
+  }
+
+  db.get(
+    `SELECT id, name, short_code, address, phone, created_at
+     FROM companies
+     WHERE id = ?`,
+    [companyId],
+    (err, row) => {
+      if (err) {
+        console.error("GET /api/companies/:id error:", err.message);
+        return res.status(500).json({ error: "Server error" });
+      }
+      if (!row) return res.status(404).json({ error: "Company not found" });
+      res.json(row);
+    }
+  );
+});
+
 // CREATE company
 router.post("/", (req, res) => {
   const { name, short_code, address, phone } = req.body;
