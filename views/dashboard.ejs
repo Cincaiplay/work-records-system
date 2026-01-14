@@ -24,9 +24,10 @@
   class="bg-light"
   data-company-id="<%= user?.company_id ?? '' %>"
   data-is-admin="<%= isAdmin ? '1' : '0' %>"
-  data-can-see-rates="<%= canSeeRates ? '1' : '0' %>">
-
-
+  data-can-see-rates="<%= canSeeRates ? '1' : '0' %>"
+  data-can-batch="<%= canUseBatch ? '1' : '0' %>"
+  >
+  
   <!-- Navbar -->
   <%- include("partials/navbar", { active: "dashboard" }); %>
 
@@ -49,12 +50,14 @@
         <div class="d-flex justify-content-between align-items-center mb-3">
           <h2 class="h4 fw-bold mb-0">Record New Work Entry</h2>
 
-          <div class="form-check form-switch">
-            <input class="form-check-input" type="checkbox" id="batchModeSwitch" />
-            <label class="form-check-label small fw-medium" for="batchModeSwitch">
-              Excel-style Batch Entry
-            </label>
-          </div>
+          <% if (canUseBatch) { %>
+            <div class="form-check form-switch" id="batchModeSwitchRow">
+              <input class="form-check-input" type="checkbox" id="batchModeSwitch" />
+              <label class="form-check-label small fw-medium" for="batchModeSwitch">
+                Excel-style Batch Entry
+              </label>
+            </div>
+          <% } %>
         </div>
 
         <!-- ========== MODE 1: Single-entry form ========== -->
@@ -79,28 +82,45 @@
                 <input type="text" id="jobNo2" class="form-control" placeholder="Enter Job No2" />
               </div>
 
+              
+
+              <!-- Job Code & Type (multi-select) -->
+              <div class="col-6">
+                <label for="jobCodeMulti" class="form-label fw-medium">Job Code &amp; Type</label>
+                <div class="d-flex gap-2 mb-2">
+                  <input id="jobSearch" class="form-control form-control-sm" placeholder="Search jobs..." />
+                  <button type="button" class="btn btn-outline-secondary btn-sm" onclick="selectAllJobs(true)">All</button>
+                  <button type="button" class="btn btn-outline-secondary btn-sm" onclick="selectAllJobs(false)">None</button>
+                </div>
+
+                <div id="jobCheckboxList"
+                    class="border rounded-3 p-2"
+                    style="max-height: 220px; overflow:auto; background:#fff;">
+                  <div class="text-muted small fst-italic">Loading jobs…</div>
+                </div>
+
+                <div class="form-text">
+                  Click to add job(s).
+                </div>
+
+              </div>
+
+              <!-- Hours per selected job -->
+              <div class="col-6">
+                <label class="form-label fw-medium">Job Hours (per selected job)</label>
+
+                <div id="jobHoursContainer" class="d-flex flex-column gap-2">
+                  <!-- JS will render rows here -->
+                  <div class="text-muted small fst-italic">Select job(s) to enter hours.</div>
+                </div>
+              </div>
+
               <!-- Worker Name -->
               <div class="col-6">
                 <label for="workerSelect" class="form-label fw-medium">Worker ID</label>
                 <select id="workerSelect" class="form-select">
                   <option value="" disabled selected>Select worker</option>
                 </select>
-              </div>
-
-              <!-- Job Code & Type -->
-              <div class="col-6">
-                <label for="jobCode" class="form-label fw-medium">Job Code &amp; Type</label>
-                <select id="jobCode" class="form-select">
-                  <option value="" disabled selected>Select job</option>
-                </select>
-              </div>
-
-              
-
-              <!-- Hours -->
-              <div class="col-6">
-                <label for="amount" class="form-label fw-medium">Job Hour</label>
-                <input type="number" id="amount" class="form-control" placeholder="Enter amount" min="0" step="0.5" />
               </div>
 
                 <!-- Fees Collected (optional) -->
@@ -120,7 +140,7 @@
                 </div>
                 
                 <!-- Note -->
-                <div class="col-6">
+                <div class="col-12">
                 <label for="note" class="form-label fw-medium">Note (optional)</label>
                 <input
                     type="text"

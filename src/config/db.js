@@ -7,10 +7,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // DB file (project-root/data.sqlite)
-const dbPath =
-  process.env.DB_PATH
-    ? process.env.DB_PATH
-    : path.join(__dirname, "../../data.sqlite");
+const dbPath = process.env.DB_PATH
+  ? process.env.DB_PATH
+  : path.join(__dirname, "../../data.sqlite");
 
 const db = new sqlite3.Database(dbPath, (err) => {
   if (err) {
@@ -134,47 +133,64 @@ db.serialize(() => {
   `);
 
   /* =====================================================
-     7) Work Entries (core transactional table)
+     7) Work Entries (HEADER) + Work Entry Jobs (LINES)
+     - HEADER: one entry (one fees_collected total)
+     - LINES : 1..N jobs under the entry (per job hours + snapshots)
   ===================================================== */
+
+  // HEADER
   db.run(`
     CREATE TABLE IF NOT EXISTS work_entries (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       company_id INTEGER NOT NULL,
 
       worker_id INTEGER NOT NULL,
-      job_id INTEGER NOT NULL,
-
       work_date TEXT NOT NULL,
 
       job_no1 TEXT NOT NULL,
       job_no2 TEXT,
 
-      amount REAL NOT NULL DEFAULT 0,
-
-      -- legacy compatibility
-      rate REAL NOT NULL DEFAULT 0,
-      pay REAL NOT NULL DEFAULT 0,
-
-      -- customer snapshot
-      customer_rate REAL NOT NULL DEFAULT 0,
-      customer_total REAL NOT NULL DEFAULT 0,
-      fees_collected REAL,
-
-      -- wage snapshot
-      wage_tier_id INTEGER,
-      wage_rate REAL NOT NULL DEFAULT 0,
-      wage_total REAL NOT NULL DEFAULT 0,
-
-      -- payment type
+      -- entry-level payment info
+      fees_collected REAL,                 -- one total for the whole entry
       is_bank INTEGER NOT NULL DEFAULT 0,
-
       note TEXT,
+
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
 
       UNIQUE (company_id, job_no1),
 
       FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE,
-      FOREIGN KEY (worker_id) REFERENCES workers(id) ON DELETE RESTRICT,
+      FOREIGN KEY (worker_id) REFERENCES workers(id) ON DELETE RESTRICT
+    )
+  `);
+
+  // LINES
+  db.run(`
+    CREATE TABLE IF NOT EXISTS work_entry_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      work_entry_id INTEGER NOT NULL,
+
+      job_id INTEGER NOT NULL,
+      hours REAL NOT NULL DEFAULT 0,
+
+      -- legacy compatibility (optional)
+      rate REAL NOT NULL DEFAULT 0,
+      pay REAL NOT NULL DEFAULT 0,
+
+      -- customer snapshot (per job line)
+      customer_rate REAL NOT NULL DEFAULT 0,
+      customer_total REAL NOT NULL DEFAULT 0,
+
+      -- wage snapshot (per job line)
+      wage_tier_id INTEGER,
+      wage_rate REAL NOT NULL DEFAULT 0,
+      wage_total REAL NOT NULL DEFAULT 0,
+
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+
+      UNIQUE (work_entry_id, job_id),
+
+      FOREIGN KEY (work_entry_id) REFERENCES work_entries(id) ON DELETE CASCADE,
       FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE RESTRICT,
       FOREIGN KEY (wage_tier_id) REFERENCES wage_tiers(id) ON DELETE SET NULL
     )
@@ -284,7 +300,9 @@ db.serialize(() => {
 
   db.run(`CREATE INDEX IF NOT EXISTS idx_work_entries_company_date ON work_entries(company_id, work_date)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_work_entries_worker_date ON work_entries(worker_id, work_date)`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_work_entries_job_date ON work_entries(job_id, work_date)`);
+
+  db.run(`CREATE INDEX IF NOT EXISTS idx_work_entry_jobs_entry ON work_entry_jobs(work_entry_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_work_entry_jobs_job ON work_entry_jobs(job_id)`);
 });
 
 export default db;

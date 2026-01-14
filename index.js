@@ -92,24 +92,30 @@ app.get(
     const user = req.session?.user;
 
     let canSeeRates = false;
+    let canUseBatch = false;
+
     try {
       if (Number(user?.is_admin) === 1) {
         canSeeRates = true;
+        canUseBatch = true; // ✅ admin can batch
       } else {
         canSeeRates = await hasPermission(Number(user?.id), "WORK_ENTRY_EDIT_RATES");
+        canUseBatch = await hasPermission(Number(user?.id), "BATCH_ENTRY"); // ✅ permission
       }
     } catch (err) {
-      console.error("canSeeRates check failed:", err);
+      console.error("permission check failed:", err);
     }
 
     res.render("dashboard", {
       title: "Dashboard",
       user,
       isAdmin: Number(user?.is_admin) === 1,
-      canSeeRates
+      canSeeRates,
+      canUseBatch, // ✅ pass to EJS
     });
   }
 );
+
 
 
 app.get("/workers", requireAuth, requirePermission("PAGE_WORKERS"), (req, res) =>

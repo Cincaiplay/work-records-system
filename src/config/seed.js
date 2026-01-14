@@ -84,6 +84,13 @@ async function seedRules() {
       "If monthly customer total reaches/exceeds 20k, wage_rate becomes 50% of customer_rate",
       0,
     ],
+    [
+      "MULTI_JOB_LOWEST_TIER_OTHERS_5050",
+      "Multi-job rule: lowest wage uses tier, others 50/50",
+      "When a work entry has multiple jobs, only the lowest wage job uses wage tier. All other jobs use 50% of customer_rate.",
+      0,
+    ],
+
   ];
 
   for (const [code, name, description, is_default] of rules) {

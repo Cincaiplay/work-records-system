@@ -1,15 +1,36 @@
 // public/js/dashboard.js
-// Same behavior, shorter + less repetition (kept logic intact)
-// ✅ NEW: wait for company-switcher (admin) before loading rules/jobs/workers
-// ✅ NEW: never cache companyId; always read latest selected company via getCompanyId()
+// ✅ Batch upgraded (nestedRows) WITHOUT changing column order/count:
+// Columns remain EXACTLY:
+// 0 Date
+// 1 Job No1
+// 2 Job No2
+// 3 Worker Code
+// 4 Job Type   ✅ (PARENT: multi-select job_type, CHILD: follows parent, NOT editable)
+// 5 Hours      ✅ (Child editable)
+// 6 CustRate
+// 7 Wage
+// 8 Fees Collected
+// 9 Bank(y/n)
+// 10 Note
 
 let allJobs = [];
 let allWorkers = [];
 let pendingEntries = [];
+// each item:
+// {
+//   header: { company_id, worker_id, worker_label, work_date, job_no1, job_no2, is_bank, fees_collected, note },
+//   jobs:   [ { job_code, job_label, hours, customer_rate, customer_total, wage_rate, wage_total, wage_tier_id, rate, pay } ]
+// }
+
 let hotBatch = null;
 let enabledCompanyRules = [];
 let rulesReady = null;
 let isSavingEntries = false;
+let batchData = []; // ✅ the real backing array used by Handsontable
+let selectedJobCodes = new Set();
+
+// prevents re-entrant rebuild loops when we call loadData() ourselves
+let isSyncingNested = false;
 
 const $ = (id) => document.getElementById(id);
 const qsa = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -55,6 +76,144 @@ function applyRatesVisibility() {
   fixColspans();
 }
 
+function applyBatchSwitchVisibility() {
+  const isAdmin = String(document.body?.dataset?.isAdmin || "0") === "1";
+
+  const row = $("batchModeSwitchRow");
+  const sw = $("batchModeSwitch");
+  const singleModeDiv = $("singleEntryMode");
+  const batchModeDiv = $("batchEntryMode");
+
+  if (!row || !sw || !singleModeDiv || !batchModeDiv) return;
+
+  if (!isAdmin) {
+    // hide the switch UI
+    row.style.display = "none";
+
+    // force OFF and force single mode
+    sw.checked = false;
+    singleModeDiv.style.display = "";
+    batchModeDiv.style.display = "none";
+    return;
+  }
+
+  // admin can see it
+  row.style.display = "";
+}
+
+
+function getSelectedJobCodes() {
+  return Array.from(selectedJobCodes);
+}
+
+function renderJobCheckboxes(filterText = "") {
+  const wrap = $("jobCheckboxList");
+  if (!wrap) return;
+
+  const q = norm(filterText).toLowerCase();
+
+  const jobs = (allJobs || []).filter(j => {
+    if (!q) return true;
+    const label = `${j.job_code || ""} ${j.job_type || ""}`.toLowerCase();
+    return label.includes(q);
+  });
+
+  if (!jobs.length) {
+    wrap.innerHTML = `<div class="text-muted small fst-italic">No matching jobs.</div>`;
+    return;
+  }
+
+  wrap.innerHTML = jobs.map((job) => {
+    const code = job.job_code;
+    const checked = selectedJobCodes.has(code) ? "checked" : "";
+    const label = `${job.job_code} – ${job.job_type}`;
+
+    return `
+      <label class="d-flex align-items-center gap-2 py-1 px-1 rounded-2 job-tick-row"
+             style="cursor:pointer;">
+        <input type="checkbox" class="form-check-input m-0"
+               data-job-code="${code}" ${checked} />
+        <span class="small">${label}</span>
+      </label>
+    `;
+  }).join("");
+
+  // event delegation (one listener)
+  wrap.querySelectorAll("input[type=checkbox][data-job-code]").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const code = cb.getAttribute("data-job-code");
+      if (!code) return;
+
+      if (cb.checked) selectedJobCodes.add(code);
+      else selectedJobCodes.delete(code);
+
+      renderJobHourRows();
+    });
+  });
+}
+
+window.selectAllJobs = function (on) {
+  if (on) {
+    (allJobs || []).forEach(j => j?.job_code && selectedJobCodes.add(j.job_code));
+  } else {
+    selectedJobCodes.clear();
+  }
+  renderJobCheckboxes($("jobSearch")?.value || "");
+  renderJobHourRows();
+};
+
+
+function renderJobHourRows() {
+  const wrap = $("jobHoursContainer");
+  if (!wrap) return;
+
+  const codes = getSelectedJobCodes();
+
+  if (!codes.length) {
+    wrap.innerHTML = `<div class="text-muted small fst-italic">Select job(s) to enter hours.</div>`;
+    return;
+  }
+
+  wrap.innerHTML = "";
+
+  codes.forEach((code) => {
+    const job = allJobs.find((j) => j.job_code === code);
+    const label = job ? `${job.job_code} – ${job.job_type}` : code;
+
+    const row = document.createElement("div");
+    row.className = "input-group";
+
+    row.innerHTML = `
+      <span class="input-group-text" style="max-width: 260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+        ${label}
+      </span>
+      <input
+        type="number"
+        class="form-control"
+        min="0"
+        step="0.5"
+        placeholder="Hours"
+        data-job-hours="${code}"
+      />
+    `;
+
+    wrap.appendChild(row);
+  });
+}
+
+function getHoursByJobCode() {
+  const codes = getSelectedJobCodes();
+  const map = new Map();
+
+  codes.forEach((code) => {
+    const input = document.querySelector(`[data-job-hours="${code}"]`);
+    const hours = input ? parseFloat(input.value) : NaN;
+    map.set(code, hours);
+  });
+
+  return map;
+}
+
 async function loadCompanyTitle() {
   const companyId = getCompanyId();
   const el = $("companyTitle");
@@ -69,11 +228,10 @@ async function loadCompanyTitle() {
     const res = await fetch(`/api/companies/${companyId}`);
     const c = await res.json().catch(() => ({}));
     el.textContent = c?.name || "Dashboard";
-  } catch (e) {
+  } catch {
     el.textContent = "Dashboard";
   }
 }
-
 
 function fixColspans() {
   const tbody = $("workEntriesBody");
@@ -110,13 +268,7 @@ async function loadEnabledCompanyRules() {
     const res = await fetch(`/api/companies/${companyId}/rules`);
     const rules = await res.json();
     enabledCompanyRules = (rules || [])
-      .filter(
-        (r) =>
-          r.enabled === 1 ||
-          r.enabled === true ||
-          r.is_default === 1 ||
-          r.is_default === true
-      )
+      .filter((r) => r.enabled === 1 || r.enabled === true || r.is_default === 1 || r.is_default === true)
       .map((r) => r.code);
   } catch (err) {
     console.error("loadEnabledCompanyRules error:", err);
@@ -135,36 +287,17 @@ async function loadJobs() {
   const jobs = await fetch(`/api/jobs?companyId=${companyId}`).then((r) => r.json());
   allJobs = jobs || [];
 
-  const select = $("jobCode");
-  if (select) {
-    select.innerHTML = `<option value="" disabled selected>Select job</option>`;
-    allJobs.forEach((job) => {
-      const opt = document.createElement("option");
-      opt.value = job.job_code;
-      opt.textContent = `${job.job_code} – ${job.job_type}`;
-      select.appendChild(opt);
-    });
-  }
+  // ✅ render checkbox list instead of <select multiple>
+  selectedJobCodes.clear();
+  renderJobCheckboxes($("jobSearch")?.value || "");
 
-  // if batch grid already exists, refresh its job dropdown source
+
   if (hotBatch) {
-    const cols = hotBatch.getSettings().columns || [];
-    const jobCol = cols[4] || {};
-    hotBatch.updateSettings({
-      columns: cols.map((c, i) =>
-        i === 4
-          ? {
-              ...jobCol,
-              type: "dropdown",
-              strict: false,
-              allowInvalid: true,
-              source: (q, cb) => cb((allJobs || []).map((j) => j.job_type)),
-            }
-          : c
-      ),
-    });
+    hotBatch.updateSettings({ columns: buildBatchColumns() });
     hotBatch.render();
   }
+
+  renderJobHourRows();
 }
 
 async function loadWorkers() {
@@ -179,48 +312,41 @@ async function loadWorkers() {
   allWorkers = workers || [];
 
   const select = $("workerSelect");
-  if (!select) return;
-
-  select.innerHTML = `<option value="" disabled selected>Select worker</option>`;
-  allWorkers.forEach((w) => {
-    const opt = document.createElement("option");
-    opt.value = w.id;
-    opt.textContent = `${w.worker_code} – ${w.worker_name}`;
-    select.appendChild(opt);
-  });
+  if (select) {
+    select.innerHTML = `<option value="" disabled selected>Select worker</option>`;
+    allWorkers.forEach((w) => {
+      const opt = document.createElement("option");
+      opt.value = w.id;
+      opt.textContent = `${w.worker_code} – ${w.worker_name}`;
+      select.appendChild(opt);
+    });
+  }
 
   if (hotBatch) {
-    const cols = hotBatch.getSettings().columns || [];
-    const workerCol = cols[3] || {};
-    hotBatch.updateSettings({
-      columns: cols.map((c, i) =>
-        i === 3
-          ? {
-              ...workerCol,
-              type: "dropdown",
-              strict: false,
-              allowInvalid: true,
-              source: (q, cb) => cb((allWorkers || []).map((w) => w.worker_code)),
-            }
-          : c
-      ),
-    });
+    hotBatch.updateSettings({ columns: buildBatchColumns() });
     hotBatch.render();
   }
 }
 
 // ---------- DOMContentLoaded ----------
 document.addEventListener("DOMContentLoaded", async () => {
-  // ✅ IMPORTANT: wait for admin company-switcher to set localStorage + session
   if (window.companyReady) await window.companyReady;
   await loadCompanyTitle();
 
   const companyId = getCompanyId();
   if (!companyId) console.warn("No companyId available yet.");
 
-  // ✅ load rules/jobs/workers AFTER companyReady
   rulesReady = loadEnabledCompanyRules();
   await Promise.all([loadJobs(), loadWorkers()]);
+
+  // ✅ multi-job selector events
+  const jobSearch = $("jobSearch");
+  if (jobSearch) {
+    jobSearch.addEventListener("input", () => {
+      renderJobCheckboxes(jobSearch.value);
+    });
+  }
+
 
   const dateInput = $("workDate");
   if (dateInput && !dateInput.value) dateInput.value = todayISO();
@@ -247,6 +373,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const batchSwitch = $("batchModeSwitch");
   const singleModeDiv = $("singleEntryMode");
   const batchModeDiv = $("batchEntryMode");
+
   if (batchSwitch && singleModeDiv && batchModeDiv) {
     batchSwitch.addEventListener("change", () => {
       const useBatch = batchSwitch.checked;
@@ -255,7 +382,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       batchModeDiv.style.display = useBatch ? "" : "none";
 
       if (useBatch) {
-        // ✅ ensure Handsontable layout recalculates properly when shown
         if (!hotBatch) {
           const rowCount = parseInt($("batchRowCount")?.value, 10) || 10;
           initHotBatch(rowCount);
@@ -277,134 +403,175 @@ window.addEventListener("resize", () => hotBatch?.render());
 
 window.applyBatchRowCount = function () {
   const rowInput = $("batchRowCount");
-  const requested = parseInt(rowInput?.value, 10) || 10;
+  let requested = parseInt(rowInput?.value, 10) || 10;
+
+  if (requested < 1) requested = 1;
+  if (requested > 500) requested = 500;
+  if (rowInput) rowInput.value = requested;
 
   if (!hotBatch) return initHotBatch(requested);
 
-  let newRows = requested;
-  if (newRows < 1) newRows = 1;
-  if (newRows > 500) newRows = 500;
-  if (rowInput) rowInput.value = newRows;
+  // ✅ ALWAYS work from ROOT parents only (never from getSourceData which may include children)
+  const parents = getRootParentsForLoad(); // your helper already filters __type === "PARENT"
 
-  const oldData = hotBatch.getData();
-  const cols = oldData[0]?.length || hotBatch.countCols() || 11;
-  const newData = Handsontable.helper.createEmptySpreadsheetData(newRows, cols);
+  // resize
+  const next = parents.slice(0, requested);
+  while (next.length < requested) next.push(makeEmptyParent());
 
-  for (let r = 0; r < Math.min(oldData.length, newRows); r++) {
-    for (let c = 0; c < cols; c++) newData[r][c] = oldData[r][c];
-  }
+  // ✅ keep the backing store in sync
+  batchData = next;
 
-  hotBatch.loadData(newData);
+  // ✅ reload only parents (nestedRows will read __children from them)
+  hotBatch.loadData(batchData);
+  refreshNestedRowsUI();
 };
+
 
 window.addBatchRow = function () {
   const rowInput = $("batchRowCount");
+
   if (!hotBatch) return initHotBatch(parseInt(rowInput?.value, 10) || 10);
 
-  const currentRows = hotBatch.countRows();
-  hotBatch.alter("insert_row", currentRows);
+  // ✅ root parents only
+  const parents = getRootParentsForLoad();
+  parents.push(makeEmptyParent());
 
-  if (rowInput) rowInput.value = currentRows + 1;
+  batchData = parents;
+
+  hotBatch.loadData(batchData);
+  refreshNestedRowsUI();
+
+  if (rowInput) rowInput.value = batchData.length;
 };
+
 
 /* =========================
    SINGLE ENTRY MODE
+   (UNCHANGED from your version)
    ========================= */
 
 window.addEntryToTable = async function () {
   await rulesReady;
 
+  const companyId = getCompanyId();
+
   const workerSelect = $("workerSelect");
-  const jobSelect = $("jobCode");
-  const amountInput = $("amount");
+  const dateInput = $("workDate");
   const jobNo1Input = $("jobNo1");
   const jobNo2Input = $("jobNo2");
-  const dateInput = $("workDate");
 
   const useCustomOverride = $("useCustomOverride");
   const customCustomerRateInput = $("customCustomerRate");
   const customWageRateInput = $("customWageRate");
 
   const worker_id = workerSelect?.value;
-  const job_code = jobSelect?.value;
-  const amount = parseFloat(amountInput?.value);
+  const work_date = norm(dateInput?.value);
   const job_no1 = norm(jobNo1Input?.value);
   const job_no2 = norm(jobNo2Input?.value);
-  const work_date = norm(dateInput?.value);
 
   const note = norm($("note")?.value);
   const fees_collected = toMoney0($("feesCollected")?.value);
+  const is_bank = $("isBank")?.checked ? 1 : 0;
 
-  if (!worker_id || !job_code || !amount || !work_date) {
-    alert("Please select worker, job, enter amount, and choose a date.");
-    return;
-  }
-  if (!job_no1) {
-    alert("Job No1 is required.");
-    return;
-  }
+  const jobCodes = getSelectedJobCodes();
+
+  if (!worker_id || !work_date) return alert("Please select worker and choose a date.");
+  if (!job_no1) return alert("Job No1 is required.");
+  if (!jobCodes.length) return alert("Please select at least 1 job.");
 
   const worker = allWorkers.find((w) => String(w.id) === String(worker_id));
-  const job = allJobs.find((j) => j.job_code === job_code);
-  if (!worker || !job) {
-    alert("Unable to find worker or job details.");
-    return;
-  }
-
-  // customer rate
-  let customerRate = job.normal_price != null ? Number(job.normal_price) : 0;
-  if (useCustomOverride?.checked) {
-    const customCustomer = parseFloat(customCustomerRateInput?.value);
-    if (!isNaN(customCustomer) && customCustomer > 0) customerRate = customCustomer;
-  }
-  if (!customerRate || customerRate <= 0) {
-    alert("No valid customer price (normal price missing and no custom entered).");
-    return;
-  }
-  const customerTotal = customerRate * amount;
-
-  // wage rate
+  if (!worker) return alert("Unable to find worker details.");
   if (!worker?.wage_tier_id) {
-    alert("This worker has no wage tier assigned yet. Please edit the worker and set a wage tier.");
-    return;
+    return alert("This worker has no wage tier assigned yet. Please edit the worker and set a wage tier.");
   }
 
-  let wageRate = getBaseWageRate(job, worker);
-  const monthKey = work_date.slice(0, 7);
+  const hoursMap = getHoursByJobCode();
+  for (const code of jobCodes) {
+    const h = Number(hoursMap.get(code));
+    if (!Number.isFinite(h) || h <= 0) return alert(`Invalid hours for job "${code}" (must be > 0).`);
+  }
 
+  const lines = jobCodes.map((code) => {
+    const job = allJobs.find((j) => j.job_code === code);
+    if (!job) throw new Error(`Job not found: ${code}`);
+
+    let customerRate = job.normal_price != null ? Number(job.normal_price) : 0;
+
+    if (useCustomOverride?.checked) {
+      const customCustomer = parseFloat(customCustomerRateInput?.value);
+      if (!isNaN(customCustomer) && customCustomer > 0) customerRate = customCustomer;
+    }
+
+    if (!customerRate || customerRate <= 0) throw new Error(`No valid customer price for job "${code}"`);
+
+    const hours = Number(hoursMap.get(code));
+    const customerTotal = customerRate * hours;
+
+    let wageRate = getBaseWageRate(job, worker);
+    if (!wageRate || wageRate <= 0) throw new Error(`No valid base wage for job "${code}" (check job wage tiers).`);
+
+    return {
+      job_code: job.job_code,
+      job_label: `${job.job_code} – ${job.job_type}`,
+      hours,
+      customer_rate: customerRate,
+      customer_total: customerTotal,
+      wage_rate: wageRate,
+    };
+  });
+
+  const monthKey = work_date.slice(0, 7);
   if (enabledCompanyRules.includes("OVER_20K_5050")) {
-    const mtdCustomer = await getMonthToDateCustomerTotal(getCompanyId(), worker.id, monthKey);
-    if (mtdCustomer + customerTotal >= 20000) wageRate = customerRate * 0.5;
+    const mtdCustomer = await getMonthToDateCustomerTotal(companyId, worker.id, monthKey);
+    const entryCustomerTotal = lines.reduce((s, x) => s + (Number(x.customer_total) || 0), 0);
+
+    if (mtdCustomer + entryCustomerTotal >= 20000) {
+      lines.forEach((x) => (x.wage_rate = x.customer_rate * 0.5));
+    }
+  }
+
+  const hasCustomWage = useCustomOverride?.checked && Number.parseFloat(customWageRateInput?.value) > 0;
+
+  if (lines.length > 1 && enabledCompanyRules.includes("MULTI_JOB_LOWEST_TIER_OTHERS_5050") && !hasCustomWage) {
+    let minRate = Infinity;
+    let minIdx = 0;
+    lines.forEach((x, idx) => {
+      if (x.wage_rate < minRate) {
+        minRate = x.wage_rate;
+        minIdx = idx;
+      }
+    });
+
+    lines.forEach((x, idx) => {
+      if (idx !== minIdx) x.wage_rate = x.customer_rate * 0.5;
+    });
   }
 
   if (useCustomOverride?.checked) {
     const customWage = parseFloat(customWageRateInput?.value);
-    if (!isNaN(customWage) && customWage > 0) wageRate = customWage;
+    if (!isNaN(customWage) && customWage > 0) {
+      lines.forEach((x) => (x.wage_rate = customWage));
+    }
   }
 
-  if (!wageRate || wageRate <= 0) {
-    alert("No valid wage rate (base wage missing and no custom entered).");
-    return;
-  }
-
-  const is_bank = $("isBank")?.checked ? 1 : 0;
+  const jobs = lines.map((x) => ({
+    ...x,
+    wage_total: x.wage_rate * x.hours,
+  }));
 
   pendingEntries.push({
-    worker_id: worker.id,
-    worker_label: workerSelect?.options?.[workerSelect.selectedIndex]?.text || "",
-    job_code: job.job_code,
-    job_label: jobSelect?.options?.[jobSelect.selectedIndex]?.text || "",
-    amount,
-    is_bank,
-    note,
-    fees_collected,
-    customerRate,
-    customerTotal,
-    rate: wageRate,
-    pay: wageRate * amount,
-    job_no1,
-    job_no2,
-    work_date,
+    header: {
+      company_id: companyId,
+      worker_id: worker.id,
+      worker_label: workerSelect?.options?.[workerSelect.selectedIndex]?.text || "",
+      work_date,
+      job_no1,
+      job_no2,
+      is_bank,
+      fees_collected,
+      note,
+    },
+    jobs,
   });
 
   renderPendingEntriesTable();
@@ -412,23 +579,431 @@ window.addEntryToTable = async function () {
 };
 
 /* =========================
-   BATCH MODE (Handsontable)
+   BATCH MODE (Handsontable nestedRows)
+   ✅ FIX: nestedRows always shows (children are created correctly)
+   ✅ FIX: editor Save commits via setDataAtRowProp(..., "msApply")
+   ✅ FIX: refresh uses plugin.updatePlugin() (no loadData loops)
    ========================= */
+
+function makeUid() {
+  return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
+function makeEmptyParent() {
+  const t = todayISO();
+  return {
+    __uid: makeUid(),
+    __type: "PARENT",
+    work_date: t,         // col 0
+    job_no1: "",          // col 1
+    job_no2: "",          // col 2
+    worker_code: "",      // col 3
+    job_type_cell: "",    // col 4
+    hours: null,          // col 5 (unused on parent)
+    cust_rate: null,      // col 6 (unused on parent)
+    wage_rate: null,      // col 7 (unused on parent)
+    fees_collected: null, // col 8
+    bank: "",             // col 9
+    note: "",             // col 10
+    __children: [],       // ✅ nestedRows default children property
+  };
+}
+
+function makeChild(job_type = "", hours = 0) {
+  return {
+    __uid: makeUid(),
+    __type: "CHILD",
+    work_date: "",
+    job_no1: "",
+    job_no2: "",
+    worker_code: "",
+    job_type_cell: job_type, // follows parent selection
+    hours,                   // ✅ editable
+    cust_rate: null,
+    wage_rate: null,
+    fees_collected: null,
+    bank: "",
+    note: "",
+  };
+}
+
+const uniqTypes = (types) => {
+  const out = [];
+  const seen = new Set();
+  (types || [])
+    .map((t) => norm(t))
+    .filter(Boolean)
+    .forEach((t) => {
+      const k = t.toLowerCase();
+      if (seen.has(k)) return;
+      seen.add(k);
+      out.push(t);
+    });
+  return out;
+};
+
+function getParentTypes(parentObj) {
+  // children already store codes in job_type_cell (we'll store job_code there)
+  const fromChildren = (parentObj?.__children || [])
+    .map((c) => norm(c?.job_type_cell))
+    .filter(Boolean);
+
+  if (fromChildren.length) return fromChildren;
+
+  const fromString = norm(parentObj?.job_type_cell);
+  if (!fromString) return [];
+  return fromString.split(",").map((x) => x.trim()).filter(Boolean);
+}
+
+
+// ✅ safest refresh for nestedRows
+function refreshNestedRowsUI() {
+  const plugin = hotBatch.getPlugin("nestedRows");
+  plugin?.updatePlugin?.();
+  hotBatch.render();
+}
+
+
+function makeChildFromParent(parent, jobType) {
+  return {
+    __uid: makeUid(),
+    __type: "CHILD",
+    __parent_uid: parent.__uid,   // ✅ important
+    work_date: parent.work_date,
+    job_no1: parent.job_no1,
+    job_no2: parent.job_no2,
+    worker_code: parent.worker_code,
+    job_type_cell: jobType, // child shows single job type
+    hours: null,
+    cust_rate: null,
+    wage_rate: null,
+    fees_collected: parent.fees_collected,
+    bank: parent.bank,
+    note: parent.note,
+    __children: [] // children of child = none
+  };
+}
+
+// visualRow is the row you get from afterChange "row"
+function syncParentChildren(visualRow, types) {
+  if (!hotBatch) return;
+
+  isSyncingNested = true;
+  try {
+    const nr = hotBatch.getPlugin("nestedRows");
+    if (!nr) return;
+
+    const rowObj = hotBatch.getSourceDataAtRow(visualRow);
+    if (!rowObj) return;
+
+    const parentUid = rowObj.__type === "PARENT" ? rowObj.__uid : rowObj.__parent_uid;
+    const parent = (batchData || []).find(p => p && p.__uid === parentUid);
+    if (!parent) return;
+
+    const cleanTypes = [...new Set((types || []).map(x => String(x ?? "").trim()).filter(Boolean))];
+
+    // map existing children (preserve entered hours/rates when reselecting)
+    const prevChildren = Array.isArray(parent.__children) ? parent.__children : [];
+    const byType = new Map(prevChildren.map(ch => [norm(ch.job_type_cell).toLowerCase(), ch]));
+
+    if (cleanTypes.length <= 1) {
+      // ✅ SINGLE JOB => NO CHILD ROW
+      // If we previously had children, pull values back into parent
+      const first = prevChildren[0];
+      if (first) {
+        if (parent.hours == null) parent.hours = first.hours ?? null;
+        if (parent.cust_rate == null) parent.cust_rate = first.cust_rate ?? null;
+        if (parent.wage_rate == null) parent.wage_rate = first.wage_rate ?? null;
+      }
+
+      parent.__children = [];
+      nr.updatePlugin();
+      hotBatch.render();
+      return;
+    }
+
+    // ✅ MULTI JOB => CHILD ROWS
+    parent.hours = null;     // parent unused
+    parent.cust_rate = null;
+    parent.wage_rate = null;
+
+    parent.__children = cleanTypes.map(t => {
+      const prev = byType.get(t.toLowerCase());
+      const child = makeChildFromParent(parent, t);
+
+      // ✅ preserve existing inputs if any
+      child.hours = prev?.hours ?? null;
+      child.cust_rate = prev?.cust_rate ?? null;
+      child.wage_rate = prev?.wage_rate ?? null;
+
+      return child;
+    });
+
+    nr.updatePlugin();
+    nr.expandChildren?.(visualRow);
+    hotBatch.render();
+  } finally {
+    isSyncingNested = false;
+  }
+}
+
+
+
+
+// Renderer: show selected job types as tags (for parent)
+function jobTypesTagRenderer(instance, td, row, col, prop, value) {
+  Handsontable.renderers.TextRenderer.apply(this, arguments);
+  td.innerHTML = "";
+
+  const s = String(value ?? "").trim();
+  if (!s) return;
+
+  const codes = s.split(",").map(x => x.trim()).filter(Boolean);
+
+  codes.forEach((code) => {
+    const job = (allJobs || []).find(j => String(j.job_code) === String(code));
+    const label = job ? `${job.job_code} – ${job.job_type}` : code;
+
+    const span = document.createElement("span");
+    span.className = "tag";
+    span.innerText = label;
+    td.appendChild(span);
+  });
+}
+
+
+// ✅ Multi-select editor (parent col 4)
+class JobsMultiSelectEditor extends Handsontable.editors.BaseEditor {
+  init() {
+    // ✅ create first
+    this.container = document.createElement("div");
+    this.container.className = "multi-select-editor";
+    this.container.style.display = "none";
+    this.container.style.position = "absolute";
+    this.container.style.zIndex = "99999";
+    this.container.style.minWidth = "280px";
+
+    // ✅ make it focusable (Escape handling / reduce aria-hidden spam)
+    this.container.tabIndex = -1;
+
+    document.body.appendChild(this.container);
+
+    this.container.addEventListener("mousedown", (e) => e.stopPropagation());
+    this.container.addEventListener("click", (e) => e.stopPropagation());
+
+    this._onEsc = (e) => {
+      if (e.key === "Escape") this.finishEditing(true);
+    };
+  }
+
+  open() {
+    const hot = this.hot || this.instance;
+    if (!hot) return this.finishEditing(true);
+
+    const cell = this.TD;
+    if (!cell) return this.finishEditing(true);
+
+    const rowObj = hot.getSourceDataAtRow(this.row);
+    if (!rowObj || rowObj.__type !== "PARENT") return this.finishEditing(true);
+
+    // position popup
+    const rect = cell.getBoundingClientRect();
+    this.container.style.display = "block";
+    this.container.style.top = `${rect.bottom + window.scrollY}px`;
+    this.container.style.left = `${rect.left + window.scrollX}px`;
+    this.container.style.minWidth = `${Math.max(280, rect.width)}px`;
+
+    // ✅ selectedSet persists across searches/renders (source of truth)
+    // your cell currently stores job codes in job_type_cell
+    const selectedSet = new Set(
+      getParentTypes(rowObj)
+        .map((x) => norm(x).toLowerCase())
+        .filter(Boolean)
+    );
+
+    const jobs = (allJobs || [])
+      .map((j) => ({
+        code: norm(j.job_code),
+        type: norm(j.job_type),
+        label: `${norm(j.job_code)} – ${norm(j.job_type)}`.trim(),
+        key: norm(j.job_code).toLowerCase(), // ✅ store by code
+      }))
+      .filter((j) => j.code && j.type);
+
+    // UI skeleton
+    this.container.innerHTML = `
+      <div class="p-2" style="width: 340px;">
+        <div class="d-flex gap-2 mb-2">
+          <input id="ms-search" class="form-control form-control-sm" placeholder="Search job code / type..." />
+          <button type="button" class="btn btn-outline-secondary btn-sm" id="ms-all">All</button>
+          <button type="button" class="btn btn-outline-secondary btn-sm" id="ms-none">None</button>
+        </div>
+
+        <div id="ms-list" class="border rounded-2" style="max-height: 220px; overflow:auto; background:#fff;"></div>
+
+        <hr class="my-2">
+        <div class="d-flex gap-2">
+          <button type="button" class="btn btn-sm btn-primary flex-grow-1" id="ms-apply">Save</button>
+          <button type="button" class="btn btn-sm btn-outline-secondary" id="ms-cancel">Cancel</button>
+        </div>
+      </div>
+    `;
+
+    const listEl = this.container.querySelector("#ms-list");
+    const searchEl = this.container.querySelector("#ms-search");
+    const btnAll = this.container.querySelector("#ms-all");
+    const btnNone = this.container.querySelector("#ms-none");
+    const btnApply = this.container.querySelector("#ms-apply");
+    const btnCancel = this.container.querySelector("#ms-cancel");
+
+    const renderList = (q = "") => {
+      const query = norm(q).toLowerCase();
+
+      const filtered = !query
+        ? jobs
+        : jobs.filter((j) => j.label.toLowerCase().includes(query));
+
+      if (!filtered.length) {
+        listEl.innerHTML = `<div class="text-muted small fst-italic p-2">No matching jobs.</div>`;
+        return;
+      }
+
+      listEl.innerHTML = filtered
+        .map((j) => {
+          const safeId = `ms-${encodeURIComponent(j.code)}`;
+          const checked = selectedSet.has(j.key) ? "checked" : "";
+          return `
+            <label for="${safeId}"
+                   class="d-flex align-items-center gap-2 px-2 py-1 rounded-2"
+                   style="cursor:pointer;">
+              <input type="checkbox" id="${safeId}" data-key="${j.key}" value="${j.code}" ${checked} />
+              <span class="small">${j.label}</span>
+            </label>
+          `;
+        })
+        .join("");
+
+      // ✅ bind events AFTER rendering
+      listEl.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+        cb.addEventListener("change", () => {
+          const key = cb.dataset.key;
+          if (!key) return;
+          if (cb.checked) selectedSet.add(key);
+          else selectedSet.delete(key);
+        });
+      });
+    };
+
+    // initial render
+    renderList("");
+
+    // search (re-render but preserve selection via selectedSet)
+    searchEl.addEventListener("input", () => renderList(searchEl.value));
+
+    // All / None (affects all jobs, then re-render current filter)
+    btnAll.onclick = () => {
+      selectedSet.clear();
+      jobs.forEach((j) => selectedSet.add(j.key));
+      renderList(searchEl.value);
+    };
+
+    btnNone.onclick = () => {
+      selectedSet.clear();
+      renderList(searchEl.value);
+    };
+
+    // Save
+    btnApply.onclick = () => {
+      const selectedCodes = Array.from(selectedSet.values())
+        .map((codeLower) => {
+          // selectedSet stores lower-case code; find original code to preserve casing
+          const j = jobs.find((x) => x.key === codeLower);
+          return j ? j.code : null;
+        })
+        .filter(Boolean);
+
+      if (!selectedCodes.length) return alert("Please select at least 1 job.");
+
+      hot.setDataAtRowProp(this.row, "job_type_cell", selectedCodes.join(", "), "msApply");
+      this.finishEditing(false);
+    };
+
+    btnCancel.onclick = () => this.finishEditing(true);
+
+    document.addEventListener("keydown", this._onEsc);
+
+    // focus search
+    setTimeout(() => searchEl.focus(), 0);
+  }
+
+  close() {
+    if (this.container) this.container.style.display = "none";
+    document.removeEventListener("keydown", this._onEsc);
+  }
+
+  getValue() {
+    return this.value ?? "";
+  }
+
+  setValue(v) {
+    this.value = v ?? "";
+  }
+
+  focus() {}
+}
+
+function buildBatchColumns() {
+  return [
+    { data: "work_date", type: "date", dateFormat: "YYYY-MM-DD", correctFormat: true, allowInvalid: true }, // 0
+    { data: "job_no1", type: "text" }, // 1
+    { data: "job_no2", type: "text" }, // 2
+    {
+      data: "worker_code",
+      type: "dropdown",
+      strict: false,
+      allowInvalid: true,
+      source: (q, cb) => cb((allWorkers || []).map((w) => w.worker_code)),
+    }, // 3
+    { data: "job_type_cell", type: "text" }, // 4
+    { data: "hours", type: "numeric", numericFormat: { pattern: "0.0" } }, // 5
+    { data: "cust_rate", type: "numeric", numericFormat: { pattern: "0.00" } }, // 6
+    { data: "wage_rate", type: "numeric", numericFormat: { pattern: "0.00" } }, // 7
+    { data: "fees_collected", type: "numeric", numericFormat: { pattern: "0.00" } }, // 8
+    {
+      data: "bank",
+      type: "text",
+      validator: (value, cb) => {
+        const v = norm(value).toUpperCase();
+        cb(v === "" || v === "Y" || v === "N");
+      },
+    }, // 9
+    { data: "note", type: "text" }, // 10
+  ];
+}
 
 function initHotBatch(rowCount = 10) {
   const container = $("hotBatch");
   if (!container) return;
 
-  const cols = 11;
-  const data = Handsontable.helper.createEmptySpreadsheetData(rowCount, cols);
-  const t = todayISO();
-  for (let r = 0; r < rowCount; r++) data[r][0] = t;
+   // ✅ prevent multiple HOT instances stacking
+  if (hotBatch) {
+    hotBatch.destroy();
+    hotBatch = null;
+    container.innerHTML = "";
+  }
 
+  batchData = Array.from({ length: rowCount }, () => makeEmptyParent());
   const showRates = canSeeRates();
 
   hotBatch = new Handsontable(container, {
-    data,
+    data: batchData,
+    nestedRows: { childrenProperty: "__children" },
     rowHeaders: true,
+    stretchH: "all",
+    width: "100%",
+    licenseKey: "non-commercial-and-evaluation",
+    outsideClickDeselects: false,
+
     colWidths: [110, 60, 60, 160, 180, 50, 70, 70, 90, 70, 230],
     colHeaders: [
       "Date",
@@ -443,102 +1018,195 @@ function initHotBatch(rowCount = 10) {
       "Bank(y/n)",
       "Note",
     ],
-    columns: [
-      { data: 0, type: "date", dateFormat: "YYYY-MM-DD", correctFormat: true, allowInvalid: true },
-      { data: 1, type: "text" },
-      { data: 2, type: "text" },
-      {
-        data: 3,
-        type: "dropdown",
-        strict: false,
-        allowInvalid: true,
-        source: (q, cb) => cb((allWorkers || []).map((w) => w.worker_code)),
-      },
-      {
-        data: 4,
-        type: "dropdown",
-        strict: false,
-        allowInvalid: true,
-        source: (q, cb) => cb((allJobs || []).map((j) => j.job_type)),
-      },
-      { data: 5, type: "numeric", numericFormat: { pattern: "0.0" } },
-      { data: 6, type: "numeric", numericFormat: { pattern: "0.00" } },
-      { data: 7, type: "numeric", numericFormat: { pattern: "0.00" } },
-      { data: 8, type: "numeric", numericFormat: { pattern: "0.00" } },
-      {
-        data: 9,
-        type: "text",
-        validator: (value, cb) => {
-          const v = norm(value).toUpperCase();
-          cb(v === "" || v === "Y" || v === "N");
-        },
-      },
-      { data: 10, type: "text" },
-    ],
-    afterChange: (changes, source) => {
-      if (!changes || source === "bankUpper") return;
-      for (const [row, prop, , newVal] of changes) {
-        if (prop === 9 || prop === "9") {
-          const v = norm(newVal).toUpperCase();
-          if (v !== newVal) hotBatch.setDataAtCell(row, 9, v, "bankUpper");
+    columns: buildBatchColumns(),
+
+    hiddenColumns: { columns: showRates ? [] : [6, 7], indicators: true },
+
+    cells: function (row, col) {
+      const props = {};
+      const r = this.instance.getSourceDataAtRow(row) || {};
+      const isChild = r.__type === "CHILD";
+
+      const childCount = Array.isArray(r.__children) ? r.__children.length : 0;
+      const isSingleJobParent = !isChild && childCount === 0 && norm(r.job_type_cell) !== "";
+
+      // =========================
+      // CHILD ROW RULES
+      // =========================
+      if (isChild) {
+        // Job Type follows parent (not editable)
+        if (col === 4) props.readOnly = true;
+
+        // ✅ editable fields on child rows
+        if (col === 5 || col === 6 || col === 7) props.readOnly = false;
+
+        // ✅ lock everything else on child rows
+        if ([0, 1, 2, 3, 8, 9, 10].includes(col)) props.readOnly = true;
+      }
+
+      // =========================
+      // PARENT ROW RULES
+      // =========================
+      if (!isChild) {
+        // multi-job parent => these are driven by child rows
+        if (!isSingleJobParent) {
+          if (col === 5 || col === 6 || col === 7) props.readOnly = true;
+        } else {
+          // ✅ single-job parent => allow Hours + CustRate + Wage
+          if (col === 5 || col === 6 || col === 7) props.readOnly = false;
         }
       }
+
+      // =========================
+      // JOB TYPE COLUMN (col 4)
+      // =========================
+      if (col === 4) {
+        if (!isChild) {
+          props.editor = JobsMultiSelectEditor;
+          props.renderer = jobTypesTagRenderer;
+          props.type = "text";
+        } else {
+          props.type = "text";
+          props.readOnly = true;
+
+          // ✅ child job type display: show "JOB_CODE – JOB_TYPE"
+          props.renderer = function (instance, td, row, col, prop, value) {
+            Handsontable.renderers.TextRenderer.apply(this, arguments);
+
+            const code = norm(value);
+            const job = (allJobs || []).find((j) => String(j.job_code) === String(code));
+
+            td.textContent = job ? `${job.job_code} – ${job.job_type}` : code;
+          };
+        }
+      }
+
+      // ---- add these near the end, before `return props;` ----
+      props.className = props.className || "";
+
+      if (isChild) props.className += " ht-child-row";
+      if (props.readOnly) props.className += " ht-readonly-cell";
+      if (!props.readOnly) props.className += " ht-editable-cell";
+      if (!props.readOnly && (col === 5 || col === 6 || col === 7)) {
+        props.className += " ht-editable-focus";
+      }
+
+
+      return props;
     },
-    stretchH: "all",
-    width: "100%",
-    hiddenColumns: { columns: showRates ? [] : [6, 7], indicators: true },
-    licenseKey: "non-commercial-and-evaluation",
+
+
+    afterOnCellMouseDown: function (event, coords) {
+      if (!coords || coords.row < 0 || coords.col < 0) return;
+      if (coords.col !== 4) return;
+
+      const rowObj = this.getSourceDataAtRow(coords.row);
+      if (!rowObj || rowObj.__type !== "PARENT") return;
+
+      event?.preventDefault?.();
+      event?.stopPropagation?.();
+
+      this.selectCell(coords.row, coords.col);
+
+      setTimeout(() => {
+        const ed = this.getActiveEditor();
+        if (ed && typeof ed.beginEditing === "function") ed.beginEditing();
+      }, 0);
+    },
+
+    afterChange: (changes, source) => {
+      if (!changes) return;
+      if (isSyncingNested) return;
+      if (source === "loadData" || source === "bankUpper" || source === "internal") return;
+
+      // ✅ ignore our internal child write
+      if (source === "syncChildren") return;
+
+      if (source !== "msApply") return;
+
+      for (const [row, prop, oldVal, newVal] of changes) {
+        if (prop === "job_type_cell") {
+          const raw = norm(newVal);
+          const types = raw ? raw.split(",").map(s => s.trim()).filter(Boolean) : [];
+          syncParentChildren(row, types);
+        }
+      }
+    }
+
+
   });
 
-  setTimeout(() => hotBatch.render(), 0);
+  refreshNestedRowsUI();
 }
+
+function getRootParentsForLoad() {
+  const src = hotBatch.getSourceData() || [];
+
+  // IMPORTANT: only keep real parents in root level
+  return src
+    .filter(r => r && r.__type === "PARENT")
+    .map(p => ({
+      ...p,
+      __children: Array.isArray(p.__children) ? p.__children : [],
+    }));
+}
+
 
 function clearBatchGrid() {
   if (!hotBatch) return;
 
-  const rowCount = parseInt($("batchRowCount")?.value, 10) || hotBatch.countRows();
-  const emptyData = Handsontable.helper.createEmptySpreadsheetData(rowCount, hotBatch.countCols());
-  hotBatch.loadData(emptyData);
+  const rowCount =
+    parseInt($("batchRowCount")?.value, 10) ||
+    getRootParentsForLoad().length ||
+    10;
+
+  batchData = Array.from({ length: rowCount }, () => makeEmptyParent());
+  hotBatch.loadData(batchData);
+  refreshNestedRowsUI();
 }
 
-// Treat row as empty if ONLY Date has value and the rest is blank
-function isEmptyBatchRow(rowArr) {
-  if (!rowArr) return true;
-  for (let i = 1; i < rowArr.length; i++) if (norm(rowArr[i]) !== "") return false;
-  return true;
-}
 
-// Read Handsontable data and push valid rows into pendingEntries[]
+/* =========================
+   Batch -> Pending (nestedRows)
+   ========================= */
+
 window.addBatchRowsToPending = async function () {
   await rulesReady;
   if (!hotBatch) return alert("Batch grid is not ready.");
 
-  const data = hotBatch.getData();
-  const successes = [];
   const failures = [];
-  const rowNo = (i) => i + 1;
+  let addedGroups = 0;
 
-  for (let i = 0; i < data.length; i++) {
-    const row = data[i];
-    if (isEmptyBatchRow(row)) continue;
+  const isValidDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(norm(s));
+  const rowNo = (i) => i + 1; // grid row number (1-based)
 
-    const work_date = norm(row[0]);
-    const job_no1 = norm(row[1]);
-    const job_no2 = norm(row[2]);
-    const worker_code = norm(row[3]);
-    const job_input = norm(row[4]);
-    const amount = parseFloat(row[5]);
+  // ✅ iterate over the REAL backing store with real row indexes
+  const src = Array.isArray(batchData) ? batchData : [];
 
-    const customCustomerRate = parseFloat(row[6]);
-    const customWageRate = parseFloat(row[7]);
-    const fees_collected = toMoney0(row[8]);
+  for (let i = 0; i < src.length; i++) {
+    const p = src[i];
+    if (!p || p.__type !== "PARENT") continue;
 
-    const bankRaw = norm(row[9]).toLowerCase();
+    const work_date = norm(p.work_date);
+    const job_no1 = norm(p.job_no1);
+    const job_no2 = norm(p.job_no2);
+    const worker_code = norm(p.worker_code);
+
+    const bankRaw = norm(p.bank).toLowerCase();
     const is_bank = bankRaw === "y" ? 1 : 0;
 
-    const note = norm(row[10]);
+    const note = norm(p.note) || null;
+    const fees_collected = norm(p.fees_collected) === "" ? 0 : toMoney0(p.fees_collected);
 
-    if (!work_date || !/^\d{4}-\d{2}-\d{2}$/.test(work_date)) {
+    const children = Array.isArray(p.__children) ? p.__children : [];
+
+    // ignore totally empty parent (only date)
+    const looksEmpty =
+      !job_no1 && !job_no2 && !worker_code && !children.length && norm(p.job_type_cell) === "";
+    if (looksEmpty) continue;
+
+    // validate parent
+    if (!work_date || !isValidDate(work_date)) {
       failures.push({ rowIndex: i, reason: "Invalid Date (must be YYYY-MM-DD)" });
       continue;
     }
@@ -550,14 +1218,15 @@ window.addBatchRowsToPending = async function () {
       failures.push({ rowIndex: i, reason: "Missing Worker Code" });
       continue;
     }
-    if (!job_input) {
-      failures.push({ rowIndex: i, reason: "Missing Job Type" });
+    const parentJob = norm(p.job_type_cell);
+
+    const isSingleJob = !children.length && parentJob !== "";
+
+    if (!children.length && !parentJob) {
+      failures.push({ rowIndex: i, reason: "No job lines (select jobs in parent Job Type column)" });
       continue;
     }
-    if (!Number.isFinite(amount) || amount <= 0) {
-      failures.push({ rowIndex: i, reason: "Invalid Hours (must be > 0)" });
-      continue;
-    }
+
 
     const worker = allWorkers.find(
       (w) => (w.worker_code || "").toLowerCase() === worker_code.toLowerCase()
@@ -566,95 +1235,204 @@ window.addBatchRowsToPending = async function () {
       failures.push({ rowIndex: i, reason: `Worker not found: "${worker_code}"` });
       continue;
     }
-
-    const job =
-      allJobs.find((j) => (j.job_code || "").toLowerCase() === job_input.toLowerCase()) ||
-      allJobs.find((j) => (j.job_type || "").toLowerCase() === job_input.toLowerCase());
-
-    if (!job) {
-      failures.push({ rowIndex: i, reason: `Job not found: "${job_input}"` });
+    if (!worker?.wage_tier_id) {
+      failures.push({ rowIndex: i, reason: `Worker has no wage tier: "${worker_code}"` });
       continue;
     }
 
-    let customerRate =
-      !isNaN(customCustomerRate) && customCustomerRate > 0
-        ? customCustomerRate
-        : job.normal_price != null && Number(job.normal_price) > 0
-        ? Number(job.normal_price)
-        : null;
+    // ✅ build job lines (single-job from parent OR multi-job from children)
+    const jobs = [];
+    const seen = new Set();
 
-    if (customerRate == null) {
-      failures.push({ rowIndex: i, reason: "Missing customer price (no normal_price and no custom)" });
-      continue;
+    if (isSingleJob) {
+      // --- SINGLE JOB: build from parent row ---
+      const job_input = parentJob;
+      const hours = Number(p.hours);
+
+      if (!Number.isFinite(hours) || hours <= 0) {
+        failures.push({ rowIndex: i, reason: `Invalid Hours (must be > 0)` });
+        jobs.length = 0;
+      } else {
+        const job =
+          allJobs.find((j) => String(j.job_type || "").toLowerCase() === job_input.toLowerCase()) ||
+          allJobs.find((j) => String(j.job_code || "").toLowerCase() === job_input.toLowerCase());
+
+        if (!job) {
+          failures.push({ rowIndex: i, reason: `Job not found: "${job_input}"` });
+        } else {
+          // ✅ allow override from parent CustRate / Wage columns if provided
+          let customerRate =
+            Number(p.cust_rate) > 0
+              ? Number(p.cust_rate)
+              : (job.normal_price != null && Number(job.normal_price) > 0 ? Number(job.normal_price) : null);
+
+          if (customerRate == null) {
+            failures.push({ rowIndex: i, reason: `Missing customer price for "${job.job_type}"` });
+          } else {
+            let wageRate =
+              Number(p.wage_rate) > 0 ? Number(p.wage_rate) : getBaseWageRate(job, worker);
+
+            if (!wageRate || wageRate <= 0) {
+              failures.push({ rowIndex: i, reason: `Missing wage rate for "${job.job_type}"` });
+            } else {
+              const customerTotal = customerRate * hours;
+
+              const monthKey = work_date.slice(0, 7);
+              if (enabledCompanyRules.includes("OVER_20K_5050")) {
+                const mtdCustomer = await getMonthToDateCustomerTotal(getCompanyId(), worker.id, monthKey);
+                if (mtdCustomer + customerTotal >= 20000) wageRate = customerRate * 0.5;
+              }
+
+              const wageTotal = wageRate * hours;
+
+              jobs.push({
+                job_id: job.id,
+                job_code: job.job_code,
+                job_label: `${job.job_code} – ${job.job_type}`,
+                hours,
+                customer_rate: customerRate,
+                customer_total: customerTotal,
+                wage_tier_id: worker.wage_tier_id,
+                wage_rate: wageRate,
+                wage_total: wageTotal,
+                rate: wageRate,
+                pay: wageTotal,
+              });
+            }
+          }
+        }
+      }
+    } else {
+      // --- MULTI JOB: build from children rows ---
+      for (let c = 0; c < children.length; c++) {
+        const ch = children[c] || {};
+        const job_input = norm(ch.job_type_cell);
+        const hours = Number(ch.hours);
+
+        if (!job_input) {
+          failures.push({ rowIndex: i, reason: `Child ${c + 1}: Missing Job Type (follows parent)` });
+          jobs.length = 0;
+          break;
+        }
+        if (!Number.isFinite(hours) || hours <= 0) {
+          failures.push({ rowIndex: i, reason: `Child ${c + 1}: Invalid Hours (must be > 0)` });
+          jobs.length = 0;
+          break;
+        }
+        if (seen.has(job_input.toLowerCase())) {
+          failures.push({ rowIndex: i, reason: `Duplicate job in same entry: ${job_input}` });
+          jobs.length = 0;
+          break;
+        }
+        seen.add(job_input.toLowerCase());
+
+        const job =
+          allJobs.find((j) => String(j.job_type || "").toLowerCase() === job_input.toLowerCase()) ||
+          allJobs.find((j) => String(j.job_code || "").toLowerCase() === job_input.toLowerCase());
+
+        if (!job) {
+          failures.push({ rowIndex: i, reason: `Job not found: "${job_input}"` });
+          jobs.length = 0;
+          break;
+        }
+
+        // ✅ allow override from child CustRate / Wage columns if provided
+        let customerRate =
+          Number(ch.cust_rate) > 0
+            ? Number(ch.cust_rate)
+            : (job.normal_price != null && Number(job.normal_price) > 0 ? Number(job.normal_price) : null);
+
+        if (customerRate == null) {
+          failures.push({ rowIndex: i, reason: `Missing customer price for "${job.job_type}"` });
+          jobs.length = 0;
+          break;
+        }
+
+        let wageRate =
+          Number(ch.wage_rate) > 0 ? Number(ch.wage_rate) : getBaseWageRate(job, worker);
+
+        if (!wageRate || wageRate <= 0) {
+          failures.push({ rowIndex: i, reason: `Missing wage rate for "${job.job_type}"` });
+          jobs.length = 0;
+          break;
+        }
+
+        const customerTotal = customerRate * hours;
+
+        const monthKey = work_date.slice(0, 7);
+        if (enabledCompanyRules.includes("OVER_20K_5050")) {
+          const mtdCustomer = await getMonthToDateCustomerTotal(getCompanyId(), worker.id, monthKey);
+          if (mtdCustomer + customerTotal >= 20000) wageRate = customerRate * 0.5;
+        }
+
+        const wageTotal = wageRate * hours;
+
+        jobs.push({
+          job_id: job.id,
+          job_code: job.job_code,
+          job_label: `${job.job_code} – ${job.job_type}`,
+          hours,
+          customer_rate: customerRate,
+          customer_total: customerTotal,
+          wage_tier_id: worker.wage_tier_id,
+          wage_rate: wageRate,
+          wage_total: wageTotal,
+          rate: wageRate,
+          pay: wageTotal,
+        });
+      }
     }
 
-    const customerTotal = customerRate * amount;
 
-    let wageRate = getBaseWageRate(job, worker);
-    const monthKey = work_date.slice(0, 7);
+    if (!jobs.length) continue;
 
-    if (enabledCompanyRules.includes("OVER_20K_5050")) {
-      const mtdCustomer = await getMonthToDateCustomerTotal(getCompanyId(), worker.id, monthKey);
-      if (mtdCustomer + customerTotal >= 20000) wageRate = customerRate * 0.5;
-    }
-
-    if (!isNaN(customWageRate) && customWageRate > 0) wageRate = customWageRate;
-
-    if (!wageRate || wageRate <= 0) {
-      failures.push({ rowIndex: i, reason: "Missing wage (no base wage & no custom wage)" });
-      continue;
-    }
-
-    successes.push({
-      rowIndex: i,
-      entry: {
+    pendingEntries.push({
+      header: {
+        work_date,
+        job_no1,
+        job_no2: job_no2 || null,
         worker_id: worker.id,
         worker_label: `${worker.worker_code} – ${worker.worker_name}`,
-        job_code: job.job_code,
-        job_label: `${job.job_code} – ${job.job_type}`,
-        amount,
         is_bank,
         note,
-        fees_collected,
-        customerRate,
-        customerTotal,
-        rate: wageRate,
-        pay: wageRate * amount,
-        job_no1,
-        job_no2,
-        work_date,
+        fees_collected: Number(fees_collected || 0),
       },
+      jobs,
     });
+
+    addedGroups++;
+
+    // ✅ clear parent row IN-PLACE
+    p.work_date = todayISO();
+    p.job_no1 = "";
+    p.job_no2 = "";
+    p.worker_code = "";
+    p.job_type_cell = "";
+    p.hours = null;
+    p.cust_rate = null;
+    p.wage_rate = null;
+    p.fees_collected = null;
+    p.bank = "";
+    p.note = "";
+    p.__children = [];
   }
 
-  successes.forEach((s) => pendingEntries.push(s.entry));
   renderPendingEntriesTable();
 
-  if (successes.length) {
-    const okSet = new Set(successes.map((s) => s.rowIndex));
-    const blank = () => new Array(hotBatch.countCols()).fill(null);
-    hotBatch.loadData(data.map((row, idx) => (okSet.has(idx) ? blank() : row)));
-  }
-
-  failures.forEach((f) => {
-    for (let c = 0; c < hotBatch.countCols(); c++) {
-      hotBatch.setCellMeta(f.rowIndex, c, "className", "htInvalidRow");
-    }
-  });
+  const nr = hotBatch.getPlugin("nestedRows");
+  nr?.updatePlugin?.();
   hotBatch.render();
 
-  const addedCount = successes.length;
-  const failedCount = failures.length;
-
-  let msg = `Added ${addedCount} row(s) to pending table.`;
-  if (failedCount) {
-    msg += `\n\n${failedCount} row(s) NOT added (left in Excel grid):\n`;
+  let msg = `Added ${addedGroups} grouped entry(ies) to pending table.`;
+  if (failures.length) {
+    msg += `\n\n${failures.length} row(s) NOT added:\n`;
     msg += failures
       .slice(0, 12)
       .map((x) => `Row ${rowNo(x.rowIndex)}: ${x.reason}`)
       .join("\n");
     if (failures.length > 12) msg += `\n...and ${failures.length - 12} more.`;
   }
+
   alert(msg);
 };
 
@@ -684,14 +1462,21 @@ async function getMonthToDateCustomerTotal(companyId, workerId, monthKey) {
   const dbTotal = Number(data.total || 0);
 
   const pendingTotal = pendingEntries
-    .filter((e) => String(e.worker_id) === String(workerId) && getMonthKey(e.work_date) === monthKey)
-    .reduce((sum, e) => sum + (Number(e.customerTotal) || 0), 0);
+    .filter(
+      (e) =>
+        String(e?.header?.worker_id) === String(workerId) && getMonthKey(e?.header?.work_date) === monthKey
+    )
+    .reduce((sum, e) => {
+      const jobs = Array.isArray(e.jobs) ? e.jobs : [];
+      return sum + jobs.reduce((s2, j) => s2 + (Number(j.customer_total) || 0), 0);
+    }, 0);
 
   return dbTotal + pendingTotal;
 }
 
 /* =========================
    PENDING TABLE + SAVE
+   (same as your version)
    ========================= */
 
 function renderPendingEntriesTable() {
@@ -701,8 +1486,9 @@ function renderPendingEntriesTable() {
   if (!tbody) return;
 
   tbody.innerHTML = "";
+
   let grandWageTotal = 0;
-  let grandCustomerTotal = 0;
+  let grandFeesTotal = 0;
 
   if (pendingEntries.length === 0) {
     tbody.innerHTML = `
@@ -715,41 +1501,108 @@ function renderPendingEntriesTable() {
     return;
   }
 
-  pendingEntries.forEach((e, index) => {
-    grandWageTotal += Number(e.pay || 0);
-    grandCustomerTotal += Number(e.fees_collected || 0);
+  let rowIndex = 0;
 
-    const payTypeText = e.is_bank ? "Bank" : "Cash";
+  pendingEntries.forEach((entry, entryIndex) => {
+    const h = entry.header || {};
+    const jobs = Array.isArray(entry.jobs) ? entry.jobs : [];
+    const payTypeText = h.is_bank ? "Bank" : "Cash";
 
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td>${index + 1}</td>
-      <td data-raw-date="${e.work_date}">${formatDateDMY(e.work_date)}</td>
-      <td>${e.job_no1 || "-"}</td>
-      <td>${e.job_no2 || "-"}</td>
-      <td>${e.worker_label}</td>
-      <td>${e.job_label}</td>
-      <td>${e.amount}</td>
+    const entryWageTotal = jobs.reduce((s, j) => s + (Number(j.wage_total) || 0), 0);
+    grandWageTotal += entryWageTotal;
+    grandFeesTotal += Number(h.fees_collected || 0);
+
+    if (jobs.length === 1) {
+      const j = jobs[0];
+      rowIndex += 1;
+
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${rowIndex}</td>
+        <td data-raw-date="${h.work_date}">${formatDateDMY(h.work_date)}</td>
+        <td>${h.job_no1 || "-"}</td>
+        <td>${h.job_no2 || "-"}</td>
+        <td>${h.worker_label || "-"}</td>
+        <td>${j.job_label || j.job_code || "-"}</td>
+        <td>${Number(j.hours || 0).toFixed(1)}</td>
+        <td>${payTypeText}</td>
+        <td>${Number(h.fees_collected || 0).toFixed(2)}</td>
+
+        <td data-col="cust_rate">${Number(j.customer_rate || 0).toFixed(2)}</td>
+        <td data-col="cust_total">${Number(j.customer_total || 0).toFixed(2)}</td>
+        <td data-col="wage_rate">${Number(j.wage_rate || 0).toFixed(2)}</td>
+        <td data-col="wage_total">${Number(j.wage_total || 0).toFixed(2)}</td>
+
+        <td class="text-muted small">${h.note ? h.note : "-"}</td>
+        <td>
+          <button class="btn btn-sm btn-outline-danger"
+            data-action="delete-pending"
+            ${isSavingEntries ? "disabled" : ""}
+            onclick="removePendingEntry(${entryIndex})">
+            Delete
+          </button>
+        </td>
+      `;
+      tbody.appendChild(tr);
+      return;
+    }
+
+    rowIndex += 1;
+    const entryCustTotal = jobs.reduce((s, j) => s + (Number(j.customer_total) || 0), 0);
+
+    const trParent = document.createElement("tr");
+    trParent.className = "table-light";
+    trParent.innerHTML = `
+      <td class="fw-bold">${rowIndex}</td>
+      <td data-raw-date="${h.work_date}">${formatDateDMY(h.work_date)}</td>
+      <td class="fw-bold">${h.job_no1 || "-"}</td>
+      <td>${h.job_no2 || "-"}</td>
+      <td>${h.worker_label || "-"}</td>
+      <td class="fw-bold">ENTRY</td>
+      <td></td>
       <td>${payTypeText}</td>
-      <td>${Number(e.fees_collected || 0).toFixed(2)}</td>
-      <td data-col="cust_rate">${Number(e.customerRate).toFixed(2)}</td>
-      <td data-col="cust_total">${Number(e.customerTotal).toFixed(2)}</td>
-      <td data-col="wage_rate">${Number(e.rate).toFixed(2)}</td>
-      <td data-col="wage_total">${Number(e.pay).toFixed(2)}</td>
-      <td class="text-muted small">${e.note ? e.note : "-"}</td>
+      <td class="fw-bold">${Number(h.fees_collected || 0).toFixed(2)}</td>
+
+      <td data-col="cust_rate"></td>
+      <td data-col="cust_total">${entryCustTotal ? entryCustTotal.toFixed(2) : ""}</td>
+      <td data-col="wage_rate"></td>
+      <td data-col="wage_total">${entryWageTotal ? entryWageTotal.toFixed(2) : ""}</td>
+
+      <td class="text-muted small">${h.note ? h.note : "-"}</td>
       <td>
         <button class="btn btn-sm btn-outline-danger"
           data-action="delete-pending"
           ${isSavingEntries ? "disabled" : ""}
-          onclick="removePendingEntry(${index})">
+          onclick="removePendingEntry(${entryIndex})">
           Delete
         </button>
-      </td>`;
-    tbody.appendChild(tr);
+      </td>
+    `;
+    tbody.appendChild(trParent);
+
+    jobs.forEach((j) => {
+      const trChild = document.createElement("tr");
+      trChild.className = "child-row";
+      trChild.innerHTML = `
+        <td></td><td></td><td></td><td></td><td></td>
+        <td style="padding-left:24px;">${j.job_label || j.job_code || "-"}</td>
+        <td>${Number(j.hours || 0).toFixed(1)}</td>
+        <td></td>
+        <td></td>
+
+        <td data-col="cust_rate">${Number(j.customer_rate || 0).toFixed(2)}</td>
+        <td data-col="cust_total">${Number(j.customer_total || 0).toFixed(2)}</td>
+        <td data-col="wage_rate">${Number(j.wage_rate || 0).toFixed(2)}</td>
+        <td data-col="wage_total">${Number(j.wage_total || 0).toFixed(2)}</td>
+
+        <td></td><td></td>
+      `;
+      tbody.appendChild(trChild);
+    });
   });
 
   if (wageTotalCell) wageTotalCell.textContent = grandWageTotal.toFixed(2);
-  if (customerTotalCell) customerTotalCell.textContent = grandCustomerTotal.toFixed(2);
+  if (customerTotalCell) customerTotalCell.textContent = grandFeesTotal.toFixed(2);
 
   applyRatesVisibility();
 }
@@ -760,25 +1613,24 @@ window.removePendingEntry = function (index) {
   renderPendingEntriesTable();
 };
 
-function validatePendingEntry(e) {
+function validatePendingEntryGrouped(entry) {
   const errors = [];
-  if (!e.worker_id) errors.push("worker_id missing");
-  if (!e.job_code) errors.push("job_code missing");
-  if (!norm(e.job_no1)) errors.push("job_no1 missing");
-  if (!e.work_date) errors.push("work_date missing");
+  const h = entry?.header || {};
+  const jobs = entry?.jobs || [];
 
-  const amount = Number(e.amount);
-  if (!Number.isFinite(amount) || amount <= 0) errors.push("amount invalid");
+  if (!h.worker_id) errors.push("worker_id missing");
+  if (!norm(h.job_no1)) errors.push("job_no1 missing");
+  if (!h.work_date) errors.push("work_date missing");
+  if (!Array.isArray(jobs) || jobs.length < 1) errors.push("jobs[] missing");
 
-  const cr = Number(e.customerRate);
-  const ct = Number(e.customerTotal);
-  const wr = Number(e.rate);
-  const wt = Number(e.pay);
+  const fees = Number(h.fees_collected || 0);
+  if (!Number.isFinite(fees) || fees < 0) errors.push("fees_collected invalid");
 
-  if (!Number.isFinite(cr) || cr <= 0) errors.push("customer rate missing/invalid");
-  if (!Number.isFinite(ct) || ct <= 0) errors.push("customer total missing/invalid");
-  if (!Number.isFinite(wr) || wr <= 0) errors.push("wage rate missing/invalid");
-  if (!Number.isFinite(wt) || wt <= 0) errors.push("wage total missing/invalid");
+  jobs.forEach((j, idx) => {
+    if (!j.job_code) errors.push(`job[${idx}] job_code missing`);
+    const hrs = Number(j.hours);
+    if (!Number.isFinite(hrs) || hrs <= 0) errors.push(`job[${idx}] hours invalid`);
+  });
 
   return errors;
 }
@@ -793,47 +1645,60 @@ window.confirmEntries = async function () {
 
   try {
     const validationFailures = pendingEntries
-      .map((e, idx) => ({ row: idx + 1, errors: validatePendingEntry(e) }))
+      .map((e, idx) => ({ row: idx + 1, errors: validatePendingEntryGrouped(e) }))
       .filter((x) => x.errors.length);
 
     if (validationFailures.length) {
       alert(
-        "Fix these rows before saving:\n\n" +
-          validationFailures.map((x) => `Row ${x.row}: ${x.errors.join(", ")}`).join("\n")
+        "Fix these entries before saving:\n\n" +
+          validationFailures.map((x) => `Entry ${x.row}: ${x.errors.join(", ")}`).join("\n")
       );
       return;
     }
 
     const results = await Promise.allSettled(
-      pendingEntries.map((e) =>
-        fetch("/api/work-entries", {
+      pendingEntries.map((entry) => {
+        const h = entry.header;
+        const jobs = entry.jobs;
+
+        return fetch("/api/work-entries", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             company_id: companyId,
-            worker_id: e.worker_id,
-            job_code: e.job_code,
-            amount: e.amount,
-            is_bank: e.is_bank ? 1 : 0,
-            note: e.note || null,
-            customer_rate: e.customerRate,
-            customer_total: e.customerTotal,
-            wage_rate: e.rate,
-            wage_total: e.pay,
-            rate: e.rate,
-            pay: e.pay,
-            job_no1: e.job_no1,
-            job_no2: e.job_no2,
-            work_date: e.work_date,
-            fees_collected: e.fees_collected || 0,
+            worker_id: h.worker_id,
+            work_date: h.work_date,
+            job_no1: h.job_no1,
+            job_no2: h.job_no2 || null,
+            fees_collected: Number(h.fees_collected || 0),
+            is_bank: h.is_bank ? 1 : 0,
+            note: h.note || null,
+            jobs: jobs.map((j) => ({
+            job_code: j.job_code,
+
+            // ✅ backend usually expects this
+            amount: j.hours,
+
+            // (optional) keep hours too if you want, but amount is the key
+            hours: j.hours,
+
+            customer_rate: j.customer_rate,
+            customer_total: j.customer_total,
+            wage_rate: j.wage_rate,
+            wage_total: j.wage_total,
+
+            wage_tier_id: j.wage_tier_id ?? null, // ✅ also good to include
+            rate: j.wage_rate,
+            pay: j.wage_total,
+          })),
           }),
         }).then(async (r) => {
           const data = await r.json().catch(() => ({}));
           if (!r.ok) throw new Error(data?.error || `HTTP ${r.status}`);
           if (data?.error) throw new Error(data.error);
           return data;
-        })
-      )
+        });
+      })
     );
 
     const failed = [];
@@ -861,8 +1726,8 @@ window.confirmEntries = async function () {
     renderPendingEntriesTable();
 
     alert(
-      `Saved ${succeededCount} row(s). ${failed.length} row(s) failed and were kept in Pending:\n\n` +
-        failed.map((x) => `Row ${x.row}: ${x.error}`).join("\n")
+      `Saved ${succeededCount} entry(s). ${failed.length} entry(s) failed and were kept in Pending:\n\n` +
+        failed.map((x) => `Entry ${x.row}: ${x.error}`).join("\n")
     );
   } finally {
     setSavingUI(false);
