@@ -1217,29 +1217,6 @@ router.get("/worker-payslip/pdf", async (req, res) => {
       });
     });
 
-    const titleCn = monthTitleFromRange(start, end);
-
-    const monthYearLabel = (isoDate) => {
-      // isoDate = YYYY-MM-DD -> "January 2026"
-      const m = String(isoDate || "").slice(5, 7);
-      const y = String(isoDate || "").slice(0, 4);
-      const map = {
-        "01": "January",
-        "02": "February",
-        "03": "March",
-        "04": "April",
-        "05": "May",
-        "06": "June",
-        "07": "July",
-        "08": "August",
-        "09": "September",
-        "10": "October",
-        "11": "November",
-        "12": "December",
-      };
-      return `${map[m] || m} ${y || ""}`.trim();
-    };
-
     const rowsRaw = await queryWorkerPayslipLines({
       companyId,
       workerId,
@@ -1267,6 +1244,30 @@ router.get("/worker-payslip/pdf", async (req, res) => {
       { total_hours: 0, total_fee: 0, total_wage: 0 }
     );
 
+    // Month label like Access footer: "August 2025"
+    const monthYearLabel = (isoDate) => {
+      const m = String(isoDate || "").slice(5, 7);
+      const y = String(isoDate || "").slice(0, 4);
+      const map = {
+        "01": "January",
+        "02": "February",
+        "03": "March",
+        "04": "April",
+        "05": "May",
+        "06": "June",
+        "07": "July",
+        "08": "August",
+        "09": "September",
+        "10": "October",
+        "11": "November",
+        "12": "December",
+      };
+      return `${map[m] || m} ${y || ""}`.trim();
+    };
+
+    // Title like Access: "11月份工资结单"
+    const titleCn = monthTitleFromRange(start, end);
+
     const filename = `Worker_Payslip_${workerId}_${start}_to_${end}.pdf`;
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
@@ -1280,137 +1281,148 @@ router.get("/worker-payslip/pdf", async (req, res) => {
 
     const fmt2 = (v) => num(v).toFixed(2);
 
-    // ===== Header =====
+    // =====================================================
+    // Header (Access-like)
+    // =====================================================
     doc.fontSize(14).text(titleCn, { align: "center" });
     doc.moveDown(0.6);
 
+    // worker line: "3 马素平" like Access
     doc.fontSize(10).text(`${worker.worker_code || ""}    ${worker.worker_name || ""}`, { align: "left" });
     doc.moveDown(0.4);
 
-    // ===== Table =====
+    // =====================================================
+    // Table with borders (Access-like)
+    // =====================================================
     const pageW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
     const x0 = doc.page.margins.left;
-
     let y = doc.y;
-
-    const col = {
-      job: Math.floor(pageW * 0.55),
-      hours: Math.floor(pageW * 0.15),
-      fee: Math.floor(pageW * 0.15),
-      wage: Math.floor(pageW * 0.15),
-    };
 
     const rowH = 16;
 
-    const ensureTableSpace = (need = 30) => {
-      if (y > doc.page.height - doc.page.margins.bottom - need) {
+    // columns similar to Access screenshot
+    const col = {
+      job: Math.floor(pageW * 0.60),
+      hours: Math.floor(pageW * 0.13),
+      fee: Math.floor(pageW * 0.14),
+      wage: Math.floor(pageW * 0.13),
+    };
+
+    const tableRight = x0 + pageW;
+    const tableBottomLimit = () => doc.page.height - doc.page.margins.bottom - 230; // keep space for footer
+
+    const ensureSpaceForRow = () => {
+      if (y + rowH > tableBottomLimit()) {
         doc.addPage();
         y = doc.page.margins.top;
       }
     };
 
-    const drawTableHeader = () => {
-      ensureTableSpace(40);
+    const drawCell = (text, x, y0, w, align = "left", bold = false) => {
       doc.save();
-      doc.rect(x0, y - 3, pageW, rowH + 6).fill("#F2F2F2");
+      doc.lineWidth(0.6).strokeColor("#999");
+      doc.rect(x, y0, w, rowH).stroke();
       doc.restore();
 
-      doc.fontSize(9).fillColor("#000");
-      let x = x0;
-      doc.text("项目", x, y, { width: col.job }); x += col.job;
-      doc.text("时钟", x, y, { width: col.hours, align: "right" }); x += col.hours;
-      doc.text("收费", x, y, { width: col.fee, align: "right" }); x += col.fee;
-      doc.text("工资", x, y, { width: col.wage, align: "right" });
-      y += rowH;
+      doc.fontSize(9);
+      doc.fillColor("#000");
+      doc.font("NotoSC");
+
+      // padding inside cell
+      const padX = 4;
+      const padY = 4;
+
+      doc.text(String(text ?? ""), x + padX, y0 + padY, {
+        width: w - padX * 2,
+        align,
+        ellipsis: true,
+      });
     };
 
-    const drawRow = (r) => {
-      ensureTableSpace(30);
-      doc.fontSize(9).fillColor("#000");
-      let x = x0;
-      doc.text(String(r.job_desc || "-"), x, y, { width: col.job }); x += col.job;
-      doc.text(fmt2(r.hours), x, y, { width: col.hours, align: "right" }); x += col.hours;
-      doc.text(fmt2(r.fee), x, y, { width: col.fee, align: "right" }); x += col.fee;
-      doc.text(fmt2(r.wage), x, y, { width: col.wage, align: "right" });
-      y += rowH;
-    };
-
-    drawTableHeader();
-    rows.forEach(drawRow);
-
-    // Totals row
-    ensureTableSpace(40);
+    // Header row background
     doc.save();
-    doc.rect(x0, y - 3, pageW, rowH + 6).fill("#FFF3CD");
+    doc.rect(x0, y, pageW, rowH).fill("#F3D7B5"); // Access-like light orange header
     doc.restore();
 
-    doc.fontSize(9).fillColor("#000");
-    let xt = x0;
-    doc.text("TOTAL", xt, y, { width: col.job }); xt += col.job;
-    doc.text(fmt2(totals.total_hours), xt, y, { width: col.hours, align: "right" }); xt += col.hours;
-    doc.text(fmt2(totals.total_fee), xt, y, { width: col.fee, align: "right" }); xt += col.fee;
-    doc.text(fmt2(totals.total_wage), xt, y, { width: col.wage, align: "right" });
+    // Header cells
+    let x = x0;
+    drawCell("项目", x, y, col.job, "center"); x += col.job;
+    drawCell("时钟", x, y, col.hours, "center"); x += col.hours;
+    drawCell("收费", x, y, col.fee, "center"); x += col.fee;
+    drawCell("工资", x, y, col.wage, "center");
     y += rowH;
 
-    // ===== Footer block (fixed position on right) =====
-    // Put footer near bottom-right, but if table is long, push to next page.
-    const footerBoxW = 240;
-    const footerX = x0 + pageW - footerBoxW;
-    const footerH = 210;
+    // Rows
+    rows.forEach((r) => {
+      ensureSpaceForRow();
+      let cx = x0;
+      drawCell(r.job_desc, cx, y, col.job, "left"); cx += col.job;
+      drawCell(fmt2(r.hours), cx, y, col.hours, "right"); cx += col.hours;
+      drawCell(fmt2(r.fee), cx, y, col.fee, "right"); cx += col.fee;
+      drawCell(fmt2(r.wage), cx, y, col.wage, "right");
+      y += rowH;
+    });
 
-    // minimum top position after table
-    const minTopAfterTable = y + 25;
-    // preferred top near bottom
-    let footerTop = doc.page.height - doc.page.margins.bottom - footerH;
-
-    // if table has grown into the footer area, move footer down after table; if no room, new page
-    if (footerTop < minTopAfterTable) {
-      // not enough space on this page
-      doc.addPage();
-      y = doc.page.margins.top;
-      footerTop = doc.page.height - doc.page.margins.bottom - footerH;
-    }
-
-    // dashed separator line above footer (full width)
-    const lineY = footerTop - 15;
+    // TOTAL row (highlight)
+    ensureSpaceForRow();
     doc.save();
-    doc.moveTo(x0, lineY).lineTo(x0 + pageW, lineY).dash(3, { space: 2 }).stroke();
+    doc.rect(x0, y, pageW, rowH).fill("#FFF3CD");
+    doc.restore();
+
+    let tx = x0;
+    drawCell("TOTAL", tx, y, col.job, "left"); tx += col.job;
+    drawCell(fmt2(totals.total_hours), tx, y, col.hours, "right"); tx += col.hours;
+    drawCell(fmt2(totals.total_fee), tx, y, col.fee, "right"); tx += col.fee;
+    drawCell(fmt2(totals.total_wage), tx, y, col.wage, "right");
+    y += rowH;
+
+    // =====================================================
+    // Blue dotted divider like Access
+    // =====================================================
+    const dividerY = Math.max(y + 18, doc.page.height - doc.page.margins.bottom - 210);
+    doc.save();
+    doc.strokeColor("#2C7BE5");
+    doc.lineWidth(1);
+    doc.dash(2, { space: 2 });
+    doc.moveTo(x0, dividerY).lineTo(tableRight, dividerY).stroke();
     doc.undash();
     doc.restore();
 
-    const companyTitle = (companyName || "COMPANY").toUpperCase();
-    const rangeLine = `${formatDMY(start)}   till   ${formatDMY(end)}`;
+    // =====================================================
+    // Footer layout (Access-like)
+    // =====================================================
+    // Company title centered (big)
+    const footerTop = dividerY + 20;
+
+    doc.fontSize(12).fillColor("#000");
+    doc.text((companyName || "DEFAULT COMPANY").toUpperCase(), x0, footerTop, { width: pageW, align: "center" });
+
+    // Date line centered (underlined look)
+    doc.fontSize(9);
+    doc.text(`${formatDMY(start)}   till   ${formatDMY(end)}`, x0, footerTop + 18, { width: pageW, align: "center" });
+
+    // Left paragraph block + Right signature block
+    const leftX = x0;
+    const rightX = x0 + Math.floor(pageW * 0.58);
+    const blockY = footerTop + 55;
+
+    const leftW = Math.floor(pageW * 0.56);
+    const rightW = pageW - (rightX - x0);
+
     const monthOf = monthYearLabel(end);
 
-    let fy = footerTop;
+    doc.fontSize(9).fillColor("#000");
+    doc.text(`Worker wages for the month of  :    ${monthOf}`, leftX, blockY, { width: leftW, align: "left" });
+    doc.text(`I am hereby acknowledging the receipts of my wages`, leftX, blockY + 14, { width: leftW, align: "left" });
+    doc.text(`amounting to RM ${fmt2(totals.total_wage)}`, leftX, blockY + 28, { width: leftW, align: "left" });
 
-    // Company name (centered in footer box)
-    doc.fontSize(11).fillColor("#000");
-    doc.text(companyTitle, footerX, fy, { width: footerBoxW, align: "center" });
-    fy += 18;
+    // signature right
+    doc.text(`签名：  ______________________________`, rightX, blockY + 28, { width: rightW, align: "left" });
 
-    // Date range line
-    doc.fontSize(9);
-    doc.text(rangeLine, footerX, fy, { width: footerBoxW, align: "center" });
-    fy += 20;
-
-    // Paragraph (left inside footer box)
-    doc.fontSize(9);
-    doc.text(`Worker wages for the month of  :  ${monthOf}`, footerX, fy, { width: footerBoxW, align: "left" });
-    fy += 14;
-    doc.text(`I am hereby acknowledging the receipts of my wages`, footerX, fy, { width: footerBoxW, align: "left" });
-    fy += 14;
-    doc.text(`amounting to RM ${fmt2(totals.total_wage)}`, footerX, fy, { width: footerBoxW, align: "left" });
-    fy += 22;
-
-    // Signature line
-    doc.text("签名：  ____________________", footerX, fy, { width: footerBoxW, align: "left" });
-    fy += 22;
-
-    // Worker line (right aligned like Access)
-    doc.text(`编号： ${worker.worker_code || ""}    ${worker.worker_name || ""}`, footerX, fy, {
-      width: footerBoxW,
-      align: "right",
+    // worker id + name on right-bottom
+    doc.text(`编号： ${worker.worker_code || ""}    ${worker.worker_name || ""}`, rightX, blockY + 55, {
+      width: rightW,
+      align: "left",
     });
 
     doc.end();
@@ -1419,6 +1431,7 @@ router.get("/worker-payslip/pdf", async (req, res) => {
     res.status(500).send("Failed to generate PDF");
   }
 });
+
 
 
 
