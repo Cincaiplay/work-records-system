@@ -45,30 +45,31 @@
             <div class="row g-2">
               <!-- ✅ Report #1 we implement now -->
               <div class="col-sm-6">
-                <button class="btn btn-warning w-100 report-btn"
+                <button class="btn btn-outline-success w-100 report-btn"
                   data-report="worker-monthly-pays" data-label="Worker Monthly Pays 技师的提成">
                   Worker Monthly Pays 技师的提成
                 </button>
               </div>
 
-              <!-- Others later -->
               <div class="col-sm-6">
-                <button class="btn btn-warning w-100 report-btn" disabled>
-                  Monthly Summary
-                  <span class="badge text-bg-secondary ms-2">later</span>
+                <button class="btn btn-outline-success w-100 report-btn"
+                  data-report="monthly-summary"
+                  data-label="Monthly Summary 月结 (Bank/Cash + Hours + %)">
+                  Monthly Summary 月结
+                </button>
+              </div>
+
+              <div class="col-sm-6">
+                <button class="btn btn-outline-success w-100 report-btn"
+                  data-report="worker-payslip"
+                  data-label="Worker Payslip 工资单">
+                  Worker Payslip 工资单
                 </button>
               </div>
 
               <div class="col-sm-6">
                 <button class="btn btn-warning w-100 report-btn" disabled>
                   Workers' Wages (Cheque)
-                  <span class="badge text-bg-secondary ms-2">later</span>
-                </button>
-              </div>
-
-              <div class="col-sm-6">
-                <button class="btn btn-warning w-100 report-btn" disabled>
-                  Workers' Pay Slip
                   <span class="badge text-bg-secondary ms-2">later</span>
                 </button>
               </div>
@@ -124,6 +125,14 @@
               <label class="form-label small mb-1">End</label>
               <input type="date" class="form-control form-control-sm" id="reportEndDate">
             </div>
+
+            <div id="workerPickerBox" class="col-md-4" style="display:none;">
+              <label class="form-label">Worker</label>
+              <select id="reportWorkerId" class="form-select form-select-sm">
+                <option value="">-- Select Worker --</option>
+              </select>
+            </div>
+
 
             <button class="btn btn-primary btn-sm" id="btnPreview">
               <i class="bi bi-eye"></i> Preview

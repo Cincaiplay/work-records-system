@@ -89,6 +89,29 @@ function payWhereSql(payFilter) {
   return ""; // BOTH
 }
 
+/**
+ * IMPORTANT (schema note):
+ * Work entries are split into:
+ *  - work_entries (header: worker_id, work_date, job_no1, job_no2, is_bank, fees_collected, ...)
+ *  - work_entry_jobs (lines: job_id, hours, customer_total, wage_total, ...)
+ *
+ * Reports must aggregate from work_entry_jobs joined to work_entries.
+ */
+
+function baseFromJoinSql() {
+  return `
+    FROM work_entries we
+    JOIN workers w ON w.id = we.worker_id
+    JOIN work_entry_jobs wej ON wej.work_entry_id = we.id
+  `;
+}
+
+function jobsLeftJoinSql() {
+  return `
+    LEFT JOIN jobs j ON j.id = wej.job_id AND j.company_id = we.company_id
+  `;
+}
+
 /* -----------------------------
    Worker Monthly Pays
 ------------------------------ */
@@ -101,14 +124,13 @@ function queryWorkerMonthlyPays({ companyId, start, end, payFilter, jobNoFilter 
       SELECT
         w.worker_code AS worker_code,
         COALESCE(w.worker_name, w.worker_english_name, '') AS worker_name,
-        SUM(COALESCE(we.amount, 0)) AS total_hours,
-        SUM(COALESCE(we.customer_total, (COALESCE(we.customer_rate, 0) * COALESCE(we.amount, 0)), 0)) AS total_customer,
-        SUM(COALESCE(we.wage_total, we.pay, 0)) AS total_wage
-      FROM work_entries we
-      JOIN workers w ON w.id = we.worker_id
+        SUM(COALESCE(wej.hours, 0)) AS total_hours,
+        SUM(COALESCE(wej.customer_total, 0)) AS total_customer,
+        SUM(COALESCE(wej.wage_total, wej.pay, 0)) AS total_wage
+      ${baseFromJoinSql()}
       WHERE we.company_id = ?
-        AND we.work_date >= ?
-        AND we.work_date <= ?
+        AND date(we.work_date) >= date(?)
+        AND date(we.work_date) <= date(?)
         ${paySql}
         ${jobNoSql}
       GROUP BY w.worker_code, w.worker_name, w.worker_english_name
@@ -267,10 +289,11 @@ function querySalesListing({ companyId, start, end, payFilter, jobNoFilter }) {
         we.work_date AS work_date,
         we.job_no1 AS bill_no,
         (j.job_code || ' - ' || COALESCE(j.job_type, '')) AS job_desc,
-        COALESCE(we.amount, 0) AS hours,
-        COALESCE(we.customer_total, (COALESCE(we.customer_rate, 0) * COALESCE(we.amount, 0)), 0) AS fee
+        COALESCE(wej.hours, 0) AS hours,
+        COALESCE(wej.customer_total, 0) AS fee
       FROM work_entries we
-      LEFT JOIN jobs j ON j.id = we.job_id AND j.company_id = we.company_id
+      JOIN work_entry_jobs wej ON wej.work_entry_id = we.id
+      ${jobsLeftJoinSql()}
       WHERE we.company_id = ?
         AND date(we.work_date) >= date(?)
         AND date(we.work_date) <= date(?)
@@ -282,8 +305,9 @@ function querySalesListing({ companyId, start, end, payFilter, jobNoFilter }) {
     const daySql = `
       SELECT
         we.work_date AS work_date,
-        SUM(COALESCE(we.customer_total, (COALESCE(we.customer_rate, 0) * COALESCE(we.amount, 0)), 0)) AS daily_sales
+        SUM(COALESCE(wej.customer_total, 0)) AS daily_sales
       FROM work_entries we
+      JOIN work_entry_jobs wej ON wej.work_entry_id = we.id
       WHERE we.company_id = ?
         AND date(we.work_date) >= date(?)
         AND date(we.work_date) <= date(?)
@@ -475,13 +499,14 @@ function queryWorkerJobListing({ companyId, start, end, payFilter, jobNoFilter }
         we.job_no1 AS bill_no,
         (j.job_code || ' - ' || COALESCE(j.job_type, '')) AS job_desc,
 
-        COALESCE(we.amount, 0) AS hours,
-        COALESCE(we.customer_total, (COALESCE(we.customer_rate, 0) * COALESCE(we.amount, 0)), 0) AS fee,
-        COALESCE(we.wage_total, we.pay, 0) AS wage
+        COALESCE(wej.hours, 0) AS hours,
+        COALESCE(wej.customer_total, 0) AS fee,
+        COALESCE(wej.wage_total, wej.pay, 0) AS wage
 
       FROM work_entries we
       JOIN workers w ON w.id = we.worker_id
-      LEFT JOIN jobs j ON j.id = we.job_id AND j.company_id = we.company_id
+      JOIN work_entry_jobs wej ON wej.work_entry_id = we.id
+      ${jobsLeftJoinSql()}
       WHERE we.company_id = ?
         AND date(we.work_date) >= date(?)
         AND date(we.work_date) <= date(?)
@@ -709,5 +734,692 @@ router.get("/account-worker-job-listing/pdf", async (req, res) => {
     res.status(500).send("Failed to generate PDF");
   }
 });
+
+
+/* -----------------------------
+   Monthly Summary (NEW)
+   - Group by month (YYYY-MM)
+   - Fees split by bank/cash using we.is_bank (header)
+   - Wages split by bank/cash using we.is_bank (header)
+   - Totals from work_entry_jobs (lines)
+------------------------------ */
+
+function queryMonthlySummary({ companyId, start, end, payFilter, jobNoFilter }) {
+  return new Promise((resolve, reject) => {
+    const paySql = payWhereSql(payFilter);     // uses alias we
+    const jobNoSql = jobNoWhereSql(jobNoFilter); // uses alias we
+
+    const sql = `
+      SELECT
+        strftime('%Y-%m', we.work_date) AS ym,
+
+        SUM(CASE WHEN COALESCE(we.is_bank,0) = 1 THEN COALESCE(wej.customer_total,0) ELSE 0 END) AS bank_fee,
+        SUM(CASE WHEN COALESCE(we.is_bank,0) = 0 THEN COALESCE(wej.customer_total,0) ELSE 0 END) AS cash_fee,
+        SUM(COALESCE(wej.customer_total,0)) AS total_fee,
+
+        SUM(CASE WHEN COALESCE(we.is_bank,0) = 1 THEN COALESCE(wej.wage_total, wej.pay, 0) ELSE 0 END) AS bank_wage,
+        SUM(CASE WHEN COALESCE(we.is_bank,0) = 0 THEN COALESCE(wej.wage_total, wej.pay, 0) ELSE 0 END) AS cash_wage,
+        SUM(COALESCE(wej.wage_total, wej.pay, 0)) AS total_wage,
+
+        SUM(COALESCE(wej.hours,0)) AS total_hours
+
+      FROM work_entries we
+      JOIN work_entry_jobs wej ON wej.work_entry_id = we.id
+      WHERE we.company_id = ?
+        AND date(we.work_date) >= date(?)
+        AND date(we.work_date) <= date(?)
+        ${paySql}
+        ${jobNoSql}
+      GROUP BY strftime('%Y-%m', we.work_date)
+      ORDER BY strftime('%Y-%m', we.work_date)
+    `;
+
+    db.all(sql, [companyId, start, end], (err, rows) => {
+      if (err) return reject(err);
+      resolve(rows || []);
+    });
+  });
+}
+
+router.get("/monthly-summary", async (req, res) => {
+  try {
+    const companyId = Number(req.query.companyId || 1);
+    const start = req.query.start;
+    const end = req.query.end;
+
+    const { canFilterPayType, payFilter } = await resolvePayFilter(req);
+    const jobNoFilter = resolveJobNoFilter(req);
+
+    if (!companyId || companyId <= 0) return res.status(400).json({ error: "Invalid companyId" });
+    if (!isValidISODate(start) || !isValidISODate(end))
+      return res.status(400).json({ error: "Invalid start/end date (use YYYY-MM-DD)" });
+    if (start > end) return res.status(400).json({ error: "Start date cannot be after end date" });
+
+    const rows = await queryMonthlySummary({ companyId, start, end, payFilter, jobNoFilter });
+
+    // compute derived columns in JS
+    const out = rows.map(r => {
+      const hours = num(r.total_hours);
+      const totalFee = num(r.total_fee);
+      const totalWage = num(r.total_wage);
+
+      const feeRate = hours > 0 ? (totalFee / hours) : 0;
+      const wageRate = hours > 0 ? (totalWage / hours) : 0;
+      const pct = totalFee > 0 ? (totalWage / totalFee) * 100 : 0;
+
+      return {
+        ym: r.ym,
+        bank_fee: num(r.bank_fee),
+        cash_fee: num(r.cash_fee),
+        total_fee: totalFee,
+
+        bank_wage: num(r.bank_wage),
+        cash_wage: num(r.cash_wage),
+        total_wage: totalWage,
+
+        total_hours: hours,
+        fee_rate: feeRate,
+        wage_rate: wageRate,
+        pct: pct,
+      };
+    });
+
+    // totals row
+    const totals = out.reduce((acc, r) => {
+      acc.bank_fee += r.bank_fee;
+      acc.cash_fee += r.cash_fee;
+      acc.total_fee += r.total_fee;
+
+      acc.bank_wage += r.bank_wage;
+      acc.cash_wage += r.cash_wage;
+      acc.total_wage += r.total_wage;
+
+      acc.total_hours += r.total_hours;
+      return acc;
+    }, {
+      bank_fee: 0, cash_fee: 0, total_fee: 0,
+      bank_wage: 0, cash_wage: 0, total_wage: 0,
+      total_hours: 0
+    });
+
+    totals.fee_rate = totals.total_hours > 0 ? totals.total_fee / totals.total_hours : 0;
+    totals.wage_rate = totals.total_hours > 0 ? totals.total_wage / totals.total_hours : 0;
+    totals.pct = totals.total_fee > 0 ? (totals.total_wage / totals.total_fee) * 100 : 0;
+
+    res.json({ canFilterPayType, rows: out, totals });
+  } catch (err) {
+    console.error("monthly-summary error:", err);
+    res.status(500).json({ error: "Failed to generate report" });
+  }
+});
+
+router.get("/monthly-summary/pdf", async (req, res) => {
+  try {
+    const companyId = Number(req.query.companyId || 1);
+    const start = req.query.start;
+    const end = req.query.end;
+
+    const { payFilter } = await resolvePayFilter(req);
+    const jobNoFilter = resolveJobNoFilter(req);
+
+    if (!companyId || companyId <= 0) return res.status(400).send("Invalid companyId");
+    if (!isValidISODate(start) || !isValidISODate(end))
+      return res.status(400).send("Invalid start/end date (use YYYY-MM-DD)");
+    if (start > end) return res.status(400).send("Start date cannot be after end date");
+
+    const rowsRaw = await queryMonthlySummary({ companyId, start, end, payFilter, jobNoFilter });
+
+    const rows = rowsRaw.map(r => {
+      const hours = num(r.total_hours);
+      const totalFee = num(r.total_fee);
+      const totalWage = num(r.total_wage);
+      return {
+        ym: r.ym,
+        bank_fee: num(r.bank_fee),
+        cash_fee: num(r.cash_fee),
+        total_fee: totalFee,
+        bank_wage: num(r.bank_wage),
+        cash_wage: num(r.cash_wage),
+        total_wage: totalWage,
+        total_hours: hours,
+        fee_rate: hours > 0 ? totalFee / hours : 0,
+        wage_rate: hours > 0 ? totalWage / hours : 0,
+        pct: totalFee > 0 ? (totalWage / totalFee) * 100 : 0,
+      };
+    });
+
+    const totals = rows.reduce((acc, r) => {
+      acc.bank_fee += r.bank_fee;
+      acc.cash_fee += r.cash_fee;
+      acc.total_fee += r.total_fee;
+      acc.bank_wage += r.bank_wage;
+      acc.cash_wage += r.cash_wage;
+      acc.total_wage += r.total_wage;
+      acc.total_hours += r.total_hours;
+      return acc;
+    }, { bank_fee:0,cash_fee:0,total_fee:0,bank_wage:0,cash_wage:0,total_wage:0,total_hours:0 });
+
+    totals.fee_rate = totals.total_hours > 0 ? totals.total_fee / totals.total_hours : 0;
+    totals.wage_rate = totals.total_hours > 0 ? totals.total_wage / totals.total_hours : 0;
+    totals.pct = totals.total_fee > 0 ? (totals.total_wage / totals.total_fee) * 100 : 0;
+
+    const filename = `Monthly_Summary_${companyId}_${start}_to_${end}.pdf`;
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
+
+    const companyName = await new Promise((resolve) => {
+      db.get(
+        "SELECT name FROM companies WHERE id = ?",
+        [companyId],
+        (err, row) => {
+          if (err) {
+            console.error("[Monthly Summary PDF] company lookup error:", err);
+            return resolve("");
+          }
+          resolve(String(row?.name || "").trim());
+        }
+      );
+    });
+
+
+
+    const doc = new PDFDocument({ size: "A4", margin: 36 });
+    doc.pipe(res);
+
+    // font
+    const fontPath = path.join(__dirname, "../../fonts/NotoSansSC-Regular.ttf");
+    doc.registerFont("NotoSC", fontPath);
+    doc.font("NotoSC");
+
+    // title
+    doc.fontSize(16).text(`${companyName || "Company"} - MONTHLY REPORTS`, { align: "center" });
+    doc.moveDown(0.4);
+    doc.fontSize(10).fillColor("#555").text(
+      `Company ID: ${companyId}    Date: ${formatDMY(start)} - ${formatDMY(end)}`,
+      { align: "center" }
+    );
+    doc.fillColor("#000");
+    doc.moveDown(1);
+
+    const fmt2 = (v) => num(v).toFixed(2);
+
+    // column widths (fit A4)
+    const pageW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+    const x0 = doc.page.margins.left;
+
+    const col = {
+      month: 90,
+      bankFee: 72,
+      cashFee: 72,
+      totalFee: 78,
+      bankWage: 72,
+      cashWage: 72,
+      totalWage: 78,
+      hours: 58,
+      feeRate: 60,
+      wageRate: 60,
+      pct: 46,
+    };
+
+    // if too wide, squeeze a bit automatically
+    const totalW = Object.values(col).reduce((s, n) => s + n, 0);
+    const scale = totalW > pageW ? (pageW / totalW) : 1;
+    Object.keys(col).forEach(k => col[k] = Math.floor(col[k] * scale));
+
+    let y = doc.y;
+    const rowH = 18;
+
+    const ensure = () => {
+      if (y > doc.page.height - doc.page.margins.bottom - 40) {
+        doc.addPage();
+        y = doc.page.margins.top;
+      }
+    };
+
+    const drawHeader = () => {
+      ensure();
+      doc.save();
+      doc.rect(x0, y - 2, pageW, rowH + 4).fill("#E9F2FF");
+      doc.restore();
+
+      doc.fontSize(9).fillColor("#000");
+      let x = x0;
+      doc.text("月份", x, y, { width: col.month }); x += col.month;
+      doc.text("银行户口", x, y, { width: col.bankFee, align: "right" }); x += col.bankFee;
+      doc.text("现金户口", x, y, { width: col.cashFee, align: "right" }); x += col.cashFee;
+      doc.text("总收费", x, y, { width: col.totalFee, align: "right" }); x += col.totalFee;
+
+      doc.text("银行工资", x, y, { width: col.bankWage, align: "right" }); x += col.bankWage;
+      doc.text("现金工资", x, y, { width: col.cashWage, align: "right" }); x += col.cashWage;
+      doc.text("总工资", x, y, { width: col.totalWage, align: "right" }); x += col.totalWage;
+
+      doc.text("总钟点", x, y, { width: col.hours, align: "right" }); x += col.hours;
+      doc.text("收费钟价", x, y, { width: col.feeRate, align: "right" }); x += col.feeRate;
+      doc.text("工资钟价", x, y, { width: col.wageRate, align: "right" }); x += col.wageRate;
+      doc.text("%", x, y, { width: col.pct, align: "right" });
+
+      y += rowH;
+    };
+
+    const monthLabel = (ym) => {
+      // ym = "YYYY-MM"
+      const [Y, M] = String(ym).split("-");
+      const map = {
+        "01":"January","02":"February","03":"March","04":"April","05":"May","06":"June",
+        "07":"July","08":"August","09":"September","10":"October","11":"November","12":"December",
+      };
+      return `${map[M] || ym} ${Y || ""}`.trim();
+    };
+
+    const drawRow = (r, isTotal = false) => {
+      ensure();
+
+      if (isTotal) {
+        doc.save();
+        doc.rect(x0, y - 2, pageW, rowH + 4).fill("#FFF3CD");
+        doc.restore();
+      }
+
+      doc.fontSize(9).fillColor("#000");
+      let x = x0;
+      doc.text(isTotal ? "TOTAL 总数" : monthLabel(r.ym), x, y, { width: col.month }); x += col.month;
+
+      doc.fillColor(isTotal ? "#B00000" : "#C00000");
+      doc.text(fmt2(r.bank_fee), x, y, { width: col.bankFee, align: "right" }); x += col.bankFee;
+      doc.fillColor(isTotal ? "#006400" : "#008000");
+      doc.text(fmt2(r.cash_fee), x, y, { width: col.cashFee, align: "right" }); x += col.cashFee;
+      doc.fillColor("#000");
+      doc.text(fmt2(r.total_fee), x, y, { width: col.totalFee, align: "right" }); x += col.totalFee;
+
+      doc.fillColor(isTotal ? "#B00000" : "#C00000");
+      doc.text(fmt2(r.bank_wage), x, y, { width: col.bankWage, align: "right" }); x += col.bankWage;
+      doc.fillColor(isTotal ? "#006400" : "#008000");
+      doc.text(fmt2(r.cash_wage), x, y, { width: col.cashWage, align: "right" }); x += col.cashWage;
+      doc.fillColor("#000");
+      doc.text(fmt2(r.total_wage), x, y, { width: col.totalWage, align: "right" }); x += col.totalWage;
+
+      doc.fillColor("#A05000");
+      doc.text(fmt2(r.total_hours), x, y, { width: col.hours, align: "right" }); x += col.hours;
+
+      doc.fillColor("#A05000");
+      doc.text(fmt2(r.fee_rate), x, y, { width: col.feeRate, align: "right" }); x += col.feeRate;
+      doc.text(fmt2(r.wage_rate), x, y, { width: col.wageRate, align: "right" }); x += col.wageRate;
+
+      doc.fillColor("#1E5AA8");
+      doc.text(fmt2(r.pct), x, y, { width: col.pct, align: "right" });
+
+      doc.fillColor("#000");
+      y += rowH;
+    };
+
+    drawHeader();
+    rows.forEach(r => drawRow(r, false));
+    drawRow({ ym:"", ...totals, bank_wage: totals.bank_wage, cash_wage: totals.cash_wage }, true);
+
+    doc.end();
+  } catch (err) {
+    console.error("monthly-summary pdf error:", err);
+    res.status(500).send("Failed to generate PDF");
+  }
+});
+
+
+/* -----------------------------
+   Worker Payslip (NEW)
+   - One worker, date range (typically one month)
+   - Lists each job line: 项目 / 时钟 / 收费 / 工资
+   - Uses work_entries + work_entry_jobs (new schema)
+------------------------------ */
+
+function queryWorkerPayslipLines({ companyId, workerId, start, end, payFilter, jobNoFilter }) {
+  return new Promise((resolve, reject) => {
+    const paySql = payWhereSql(payFilter);       // uses alias we
+    const jobNoSql = jobNoWhereSql(jobNoFilter); // uses alias we
+
+    const sql = `
+      SELECT
+        we.work_date AS work_date,
+        we.job_no1 AS bill_no,
+
+        COALESCE(j.job_code, '') AS job_code,
+        COALESCE(j.job_type, '') AS job_type,
+
+        COALESCE(wej.hours, 0) AS hours,
+        COALESCE(wej.customer_total, 0) AS fee,
+        COALESCE(wej.wage_total, wej.pay, 0) AS wage
+
+      FROM work_entries we
+      JOIN work_entry_jobs wej ON wej.work_entry_id = we.id
+      LEFT JOIN jobs j ON j.id = wej.job_id AND j.company_id = we.company_id
+
+      WHERE we.company_id = ?
+        AND we.worker_id = ?
+        AND date(we.work_date) >= date(?)
+        AND date(we.work_date) <= date(?)
+        ${paySql}
+        ${jobNoSql}
+
+      ORDER BY date(we.work_date), CAST(we.job_no1 AS INTEGER), we.job_no1, COALESCE(j.job_code,'')
+    `;
+
+    db.all(sql, [companyId, workerId, start, end], (err, rows) => {
+      if (err) return reject(err);
+      resolve(rows || []);
+    });
+  });
+}
+
+function getWorkerById({ companyId, workerId }) {
+  return new Promise((resolve) => {
+    db.get(
+      `SELECT id, worker_code, COALESCE(worker_name, worker_english_name, '') AS worker_name
+       FROM workers
+       WHERE id = ? AND company_id = ?`,
+      [workerId, companyId],
+      (err, row) => {
+        if (err) return resolve(null);
+        resolve(row || null);
+      }
+    );
+  });
+}
+
+function getCompanyNameById(companyId) {
+  return new Promise((resolve) => {
+    db.get("SELECT name FROM companies WHERE id = ?", [companyId], (err, row) => {
+      if (err) return resolve("");
+      resolve(String(row?.name || "").trim());
+    });
+  });
+}
+
+function monthTitleFromRange(start, end) {
+  // If range spans multiple months, still show end month like Access printouts commonly do.
+  const m = String(end || start || "").slice(5, 7);
+  const map = { "01":"1","02":"2","03":"3","04":"4","05":"5","06":"6","07":"7","08":"8","09":"9","10":"10","11":"11","12":"12" };
+  return `${map[m] || m} 月份工资结单`;
+}
+
+router.get("/worker-payslip", async (req, res) => {
+  try {
+    const companyId = Number(req.query.companyId || 1);
+    const workerId = Number(req.query.workerId || 0);
+    const start = req.query.start;
+    const end = req.query.end;
+
+    const { canFilterPayType, payFilter } = await resolvePayFilter(req);
+    const jobNoFilter = resolveJobNoFilter(req);
+
+    if (!companyId || companyId <= 0) return res.status(400).json({ error: "Invalid companyId" });
+    if (!workerId || workerId <= 0) return res.status(400).json({ error: "Please select a worker." });
+    if (!isValidISODate(start) || !isValidISODate(end))
+      return res.status(400).json({ error: "Invalid start/end date (use YYYY-MM-DD)" });
+    if (start > end) return res.status(400).json({ error: "Start date cannot be after end date" });
+
+    const worker = await getWorkerById({ companyId, workerId });
+    if (!worker) return res.status(404).json({ error: "Worker not found." });
+
+    const rows = await queryWorkerPayslipLines({ companyId, workerId, start, end, payFilter, jobNoFilter });
+
+    const totals = rows.reduce(
+      (acc, r) => {
+        acc.total_hours += num(r.hours);
+        acc.total_fee += num(r.fee);
+        acc.total_wage += num(r.wage);
+        return acc;
+      },
+      { total_hours: 0, total_fee: 0, total_wage: 0 }
+    );
+
+    res.json({
+      canFilterPayType,
+      worker: { id: worker.id, worker_code: worker.worker_code, worker_name: worker.worker_name },
+      title: monthTitleFromRange(start, end),
+      rows: rows.map(r => ({
+        work_date: r.work_date,
+        bill_no: r.bill_no,
+        job_desc: `${String(r.job_code || "").trim()}${r.job_type ? " - " + String(r.job_type).trim() : ""}`.trim() || "-",
+        hours: num(r.hours),
+        fee: num(r.fee),
+        wage: num(r.wage),
+      })),
+      totals
+    });
+  } catch (err) {
+    console.error("worker-payslip error:", err);
+    res.status(500).json({ error: "Failed to generate report" });
+  }
+});
+
+router.get("/worker-payslip/pdf", async (req, res) => {
+  try {
+    const companyId = Number(req.query.companyId || 1);
+    const workerId = Number(req.query.workerId || 0);
+    const start = req.query.start;
+    const end = req.query.end;
+
+    const { payFilter } = await resolvePayFilter(req);
+    const jobNoFilter = resolveJobNoFilter(req);
+
+    if (!companyId || companyId <= 0) return res.status(400).send("Invalid companyId");
+    if (!workerId || workerId <= 0) return res.status(400).send("Please select a worker.");
+    if (!isValidISODate(start) || !isValidISODate(end))
+      return res.status(400).send("Invalid start/end date (use YYYY-MM-DD)");
+    if (start > end) return res.status(400).send("Start date cannot be after end date");
+
+    const worker = await getWorkerById({ companyId, workerId });
+    if (!worker) return res.status(404).send("Worker not found.");
+
+    const companyName = await new Promise((resolve) => {
+      db.get("SELECT name FROM companies WHERE id = ?", [companyId], (err, row) => {
+        if (err) return resolve("");
+        resolve(String(row?.name || "").trim());
+      });
+    });
+
+    const titleCn = monthTitleFromRange(start, end);
+
+    const monthYearLabel = (isoDate) => {
+      // isoDate = YYYY-MM-DD -> "January 2026"
+      const m = String(isoDate || "").slice(5, 7);
+      const y = String(isoDate || "").slice(0, 4);
+      const map = {
+        "01": "January",
+        "02": "February",
+        "03": "March",
+        "04": "April",
+        "05": "May",
+        "06": "June",
+        "07": "July",
+        "08": "August",
+        "09": "September",
+        "10": "October",
+        "11": "November",
+        "12": "December",
+      };
+      return `${map[m] || m} ${y || ""}`.trim();
+    };
+
+    const rowsRaw = await queryWorkerPayslipLines({
+      companyId,
+      workerId,
+      start,
+      end,
+      payFilter,
+      jobNoFilter,
+    });
+
+    const rows = rowsRaw.map((r) => ({
+      job_desc:
+        `${String(r.job_code || "").trim()}${r.job_type ? " - " + String(r.job_type).trim() : ""}`.trim() || "-",
+      hours: num(r.hours),
+      fee: num(r.fee),
+      wage: num(r.wage),
+    }));
+
+    const totals = rows.reduce(
+      (acc, r) => {
+        acc.total_hours += num(r.hours);
+        acc.total_fee += num(r.fee);
+        acc.total_wage += num(r.wage);
+        return acc;
+      },
+      { total_hours: 0, total_fee: 0, total_wage: 0 }
+    );
+
+    const filename = `Worker_Payslip_${workerId}_${start}_to_${end}.pdf`;
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
+
+    const doc = new PDFDocument({ size: "A4", margin: 50 });
+    doc.pipe(res);
+
+    const fontPath = path.join(__dirname, "../../fonts/NotoSansSC-Regular.ttf");
+    doc.registerFont("NotoSC", fontPath);
+    doc.font("NotoSC");
+
+    const fmt2 = (v) => num(v).toFixed(2);
+
+    // ===== Header =====
+    doc.fontSize(14).text(titleCn, { align: "center" });
+    doc.moveDown(0.6);
+
+    doc.fontSize(10).text(`${worker.worker_code || ""}    ${worker.worker_name || ""}`, { align: "left" });
+    doc.moveDown(0.4);
+
+    // ===== Table =====
+    const pageW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+    const x0 = doc.page.margins.left;
+
+    let y = doc.y;
+
+    const col = {
+      job: Math.floor(pageW * 0.55),
+      hours: Math.floor(pageW * 0.15),
+      fee: Math.floor(pageW * 0.15),
+      wage: Math.floor(pageW * 0.15),
+    };
+
+    const rowH = 16;
+
+    const ensureTableSpace = (need = 30) => {
+      if (y > doc.page.height - doc.page.margins.bottom - need) {
+        doc.addPage();
+        y = doc.page.margins.top;
+      }
+    };
+
+    const drawTableHeader = () => {
+      ensureTableSpace(40);
+      doc.save();
+      doc.rect(x0, y - 3, pageW, rowH + 6).fill("#F2F2F2");
+      doc.restore();
+
+      doc.fontSize(9).fillColor("#000");
+      let x = x0;
+      doc.text("项目", x, y, { width: col.job }); x += col.job;
+      doc.text("时钟", x, y, { width: col.hours, align: "right" }); x += col.hours;
+      doc.text("收费", x, y, { width: col.fee, align: "right" }); x += col.fee;
+      doc.text("工资", x, y, { width: col.wage, align: "right" });
+      y += rowH;
+    };
+
+    const drawRow = (r) => {
+      ensureTableSpace(30);
+      doc.fontSize(9).fillColor("#000");
+      let x = x0;
+      doc.text(String(r.job_desc || "-"), x, y, { width: col.job }); x += col.job;
+      doc.text(fmt2(r.hours), x, y, { width: col.hours, align: "right" }); x += col.hours;
+      doc.text(fmt2(r.fee), x, y, { width: col.fee, align: "right" }); x += col.fee;
+      doc.text(fmt2(r.wage), x, y, { width: col.wage, align: "right" });
+      y += rowH;
+    };
+
+    drawTableHeader();
+    rows.forEach(drawRow);
+
+    // Totals row
+    ensureTableSpace(40);
+    doc.save();
+    doc.rect(x0, y - 3, pageW, rowH + 6).fill("#FFF3CD");
+    doc.restore();
+
+    doc.fontSize(9).fillColor("#000");
+    let xt = x0;
+    doc.text("TOTAL", xt, y, { width: col.job }); xt += col.job;
+    doc.text(fmt2(totals.total_hours), xt, y, { width: col.hours, align: "right" }); xt += col.hours;
+    doc.text(fmt2(totals.total_fee), xt, y, { width: col.fee, align: "right" }); xt += col.fee;
+    doc.text(fmt2(totals.total_wage), xt, y, { width: col.wage, align: "right" });
+    y += rowH;
+
+    // ===== Footer block (fixed position on right) =====
+    // Put footer near bottom-right, but if table is long, push to next page.
+    const footerBoxW = 240;
+    const footerX = x0 + pageW - footerBoxW;
+    const footerH = 210;
+
+    // minimum top position after table
+    const minTopAfterTable = y + 25;
+    // preferred top near bottom
+    let footerTop = doc.page.height - doc.page.margins.bottom - footerH;
+
+    // if table has grown into the footer area, move footer down after table; if no room, new page
+    if (footerTop < minTopAfterTable) {
+      // not enough space on this page
+      doc.addPage();
+      y = doc.page.margins.top;
+      footerTop = doc.page.height - doc.page.margins.bottom - footerH;
+    }
+
+    // dashed separator line above footer (full width)
+    const lineY = footerTop - 15;
+    doc.save();
+    doc.moveTo(x0, lineY).lineTo(x0 + pageW, lineY).dash(3, { space: 2 }).stroke();
+    doc.undash();
+    doc.restore();
+
+    const companyTitle = (companyName || "COMPANY").toUpperCase();
+    const rangeLine = `${formatDMY(start)}   till   ${formatDMY(end)}`;
+    const monthOf = monthYearLabel(end);
+
+    let fy = footerTop;
+
+    // Company name (centered in footer box)
+    doc.fontSize(11).fillColor("#000");
+    doc.text(companyTitle, footerX, fy, { width: footerBoxW, align: "center" });
+    fy += 18;
+
+    // Date range line
+    doc.fontSize(9);
+    doc.text(rangeLine, footerX, fy, { width: footerBoxW, align: "center" });
+    fy += 20;
+
+    // Paragraph (left inside footer box)
+    doc.fontSize(9);
+    doc.text(`Worker wages for the month of  :  ${monthOf}`, footerX, fy, { width: footerBoxW, align: "left" });
+    fy += 14;
+    doc.text(`I am hereby acknowledging the receipts of my wages`, footerX, fy, { width: footerBoxW, align: "left" });
+    fy += 14;
+    doc.text(`amounting to RM ${fmt2(totals.total_wage)}`, footerX, fy, { width: footerBoxW, align: "left" });
+    fy += 22;
+
+    // Signature line
+    doc.text("签名：  ____________________", footerX, fy, { width: footerBoxW, align: "left" });
+    fy += 22;
+
+    // Worker line (right aligned like Access)
+    doc.text(`编号： ${worker.worker_code || ""}    ${worker.worker_name || ""}`, footerX, fy, {
+      width: footerBoxW,
+      align: "right",
+    });
+
+    doc.end();
+  } catch (err) {
+    console.error("worker-payslip pdf error:", err);
+    res.status(500).send("Failed to generate PDF");
+  }
+});
+
+
 
 export default router;

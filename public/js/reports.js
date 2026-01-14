@@ -9,6 +9,8 @@ const PAY_FILTER_REPORTS = new Set([
   "worker-monthly-pays",
   "sales-listing",
   "account-worker-job-listing",
+  "monthly-summary", // ✅ add this
+  "worker-payslip",
 ]);
 
 /* -----------------------------
@@ -92,6 +94,38 @@ function wireJobNoFilterRules() {
   j2.addEventListener("change", normalize);
 }
 
+async function loadWorkersIntoSelect() {
+  const sel = document.getElementById("reportWorkerId");
+  if (!sel) return;
+
+  const companyId = getCompanyIdSafe();
+  const res = await fetch(`/api/workers?companyId=${companyId}`);
+  const data = await res.json().catch(() => ({}));
+
+  const list = Array.isArray(data) ? data : (data.workers || data.rows || []);
+  sel.innerHTML = `<option value="">-- Select Worker --</option>`;
+
+  list.forEach(w => {
+    const id = w.id;
+    const code = w.worker_code || "";
+    const name = w.worker_name || w.worker_english_name || "";
+    const label = `${code} ${name}`.trim() || `Worker ${id}`;
+    const opt = document.createElement("option");
+    opt.value = String(id);
+    opt.textContent = label;
+    sel.appendChild(opt);
+  });
+}
+
+function showOrHideWorkerPicker(reportKey) {
+  const box = document.getElementById("workerPickerBox");
+  if (!box) return;
+  const show = reportKey === "worker-payslip";
+  box.style.display = show ? "" : "none";
+  if (show) loadWorkersIntoSelect();
+}
+
+
 /* -----------------------------
    Report selection
 ------------------------------ */
@@ -99,6 +133,7 @@ function selectReport(key, label) {
   selectedReport = key;
 
   showOrHidePayFilters(key);
+  showOrHideWorkerPicker(key);
 
   const titleEl = document.getElementById("reportTitle");
   const subEl = document.getElementById("reportSubtitle");
@@ -115,6 +150,16 @@ function selectReport(key, label) {
     contentEl.innerHTML =
       `<div class="text-muted small">Click <strong>Preview</strong> to generate the report.</div>`;
   }
+}
+
+function monthLabel(ym) {
+  // ym = "YYYY-MM"
+  const [Y, M] = String(ym || "").split("-");
+  const map = {
+    "01":"January","02":"February","03":"March","04":"April","05":"May","06":"June",
+    "07":"July","08":"August","09":"September","10":"October","11":"November","12":"December",
+  };
+  return `${map[M] || ym} ${Y || ""}`.trim();
 }
 
 /* -----------------------------
@@ -306,6 +351,7 @@ function renderWorkerJobListingHtml(data, meta) {
   return html;
 }
 
+
 /* -----------------------------
    API calls
 ------------------------------ */
@@ -408,6 +454,206 @@ function exportWorkerJobListingPdf() {
   );
 }
 
+function renderMonthlySummaryHtml(rows, totals) {
+  if (!rows || rows.length === 0) {
+    return `<div class="text-muted">No data found for selected date range.</div>`;
+  }
+
+  const t = totals || {};
+  const fmt2 = (n) => Number(n || 0).toFixed(2);
+
+  const rowHtml = rows.map(r => `
+    <tr>
+      <td class="text-primary">${monthLabel(r.ym)}</td>
+
+      <td class="text-end text-danger">${fmt2(r.bank_fee)}</td>
+      <td class="text-end text-success">${fmt2(r.cash_fee)}</td>
+      <td class="text-end fw-semibold">${fmt2(r.total_fee)}</td>
+
+      <td class="text-end text-danger">${fmt2(r.bank_wage)}</td>
+      <td class="text-end text-success">${fmt2(r.cash_wage)}</td>
+      <td class="text-end fw-semibold">${fmt2(r.total_wage)}</td>
+
+      <td class="text-end" style="color:#a85b00;">${fmt2(r.total_hours)}</td>
+      <td class="text-end" style="color:#a85b00;">${fmt2(r.fee_rate)}</td>
+      <td class="text-end" style="color:#a85b00;">${fmt2(r.wage_rate)}</td>
+      <td class="text-end text-primary">${fmt2(r.pct)}</td>
+    </tr>
+  `).join("");
+
+  const totalHtml = `
+    <tr class="table-warning">
+      <td class="fw-bold">TOTAL 总数</td>
+
+      <td class="text-end fw-bold text-danger">${fmt2(t.bank_fee)}</td>
+      <td class="text-end fw-bold text-success">${fmt2(t.cash_fee)}</td>
+      <td class="text-end fw-bold">${fmt2(t.total_fee)}</td>
+
+      <td class="text-end fw-bold text-danger">${fmt2(t.bank_wage)}</td>
+      <td class="text-end fw-bold text-success">${fmt2(t.cash_wage)}</td>
+      <td class="text-end fw-bold">${fmt2(t.total_wage)}</td>
+
+      <td class="text-end fw-bold" style="color:#a85b00;">${fmt2(t.total_hours)}</td>
+      <td class="text-end fw-bold" style="color:#a85b00;">${fmt2(t.fee_rate)}</td>
+      <td class="text-end fw-bold" style="color:#a85b00;">${fmt2(t.wage_rate)}</td>
+      <td class="text-end fw-bold text-primary">${fmt2(t.pct)}</td>
+    </tr>
+  `;
+
+  return `
+    <div class="table-responsive">
+      <table class="table table-sm align-middle">
+        <thead class="table-light">
+          <tr>
+            <th>月份</th>
+
+            <th class="text-end">收费 银行户口</th>
+            <th class="text-end">收费 现金户口</th>
+            <th class="text-end">收费 总收费</th>
+
+            <th class="text-end">工资 银行工资</th>
+            <th class="text-end">工资 现金工资</th>
+            <th class="text-end">工资 总工资</th>
+
+            <th class="text-end">总钟点</th>
+            <th class="text-end">收费钟价</th>
+            <th class="text-end">工资钟价</th>
+            <th class="text-end">%</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rowHtml}
+          ${totalHtml}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+async function previewMonthlySummary() {
+  const companyId = getCompanyIdSafe();
+  const startDate = document.getElementById("reportStartDate")?.value || "";
+  const endDate = document.getElementById("reportEndDate")?.value || "";
+  if (!startDate || !endDate) return alert("Please select start and end date.");
+
+  const contentEl = document.getElementById("reportContent");
+  if (contentEl) contentEl.innerHTML = `<div class="text-muted small">Loading...</div>`;
+
+  const qs = getPayTypeQuery() + getJobNoQuery();
+  const url = `/api/reports/monthly-summary?companyId=${companyId}&start=${startDate}&end=${endDate}${qs}`;
+
+  const res = await fetch(url);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    if (contentEl) contentEl.innerHTML = `<div class="text-danger">${data?.error || "Failed to load report"}</div>`;
+    return;
+  }
+
+  // ✅ same behavior as others: use existing UI permission flag
+  showOrHidePayFilters("monthly-summary");
+
+  if (contentEl) contentEl.innerHTML = renderMonthlySummaryHtml(data.rows, data.totals);
+}
+
+function exportMonthlySummaryPdf() {
+  const companyId = getCompanyIdSafe();
+  const startDate = document.getElementById("reportStartDate")?.value || "";
+  const endDate = document.getElementById("reportEndDate")?.value || "";
+  if (!startDate || !endDate) return alert("Please select start and end date.");
+
+  const qs = getPayTypeQuery() + getJobNoQuery();
+  window.open(
+    `/api/reports/monthly-summary/pdf?companyId=${companyId}&start=${startDate}&end=${endDate}${qs}`,
+    "_blank"
+  );
+}
+
+async function previewWorkerPayslip() {
+  const companyId = getCompanyIdSafe();
+  const workerId = document.getElementById("reportWorkerId")?.value || "";
+  const startDate = document.getElementById("reportStartDate")?.value || "";
+  const endDate = document.getElementById("reportEndDate")?.value || "";
+
+  if (!workerId) return alert("Please select a worker.");
+  if (!startDate || !endDate) return alert("Please select start and end date.");
+
+  document.getElementById("reportContent").innerHTML =
+    `<div class="text-muted small">Loading...</div>`;
+
+  const qs = getPayTypeQuery() + getJobNoQuery();
+  const url = `/api/reports/worker-payslip?companyId=${companyId}&workerId=${workerId}&start=${startDate}&end=${endDate}${qs}`;
+
+  const res = await fetch(url);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) return alert(data?.error || "Failed to generate report.");
+
+  // Simple HTML preview (PDF is the real output)
+  const rows = data.rows || [];
+  const w = data.worker || {};
+  const t = data.totals || {};
+  const title = data.title || "Worker Payslip";
+
+  const html = `
+    <div class="mb-2">
+      <div class="fw-bold">${title}</div>
+      <div class="text-muted small">${w.worker_code || ""} ${w.worker_name || ""}</div>
+      <div class="text-muted small">${startDate} to ${endDate}</div>
+    </div>
+
+    <div class="table-responsive">
+      <table class="table table-sm align-middle">
+        <thead class="table-light">
+          <tr>
+            <th>项目</th>
+            <th class="text-end">时钟</th>
+            <th class="text-end">收费</th>
+            <th class="text-end">工资</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map(r => `
+            <tr>
+              <td>${r.job_desc || "-"}</td>
+              <td class="text-end">${fmt(r.hours)}</td>
+              <td class="text-end">${fmt(r.fee)}</td>
+              <td class="text-end">${fmt(r.wage)}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+        <tfoot>
+          <tr class="fw-bold table-warning">
+            <td>TOTAL</td>
+            <td class="text-end">${fmt(t.total_hours)}</td>
+            <td class="text-end">${fmt(t.total_fee)}</td>
+            <td class="text-end">${fmt(t.total_wage)}</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+
+    <div class="text-muted small">For official layout, use PDF export.</div>
+  `;
+
+  document.getElementById("reportContent").innerHTML = html;
+}
+
+function exportWorkerPayslipPdf() {
+  const companyId = getCompanyIdSafe();
+  const workerId = document.getElementById("reportWorkerId")?.value || "";
+  const startDate = document.getElementById("reportStartDate")?.value || "";
+  const endDate = document.getElementById("reportEndDate")?.value || "";
+
+  if (!workerId) return alert("Please select a worker.");
+  if (!startDate || !endDate) return alert("Please select start and end date.");
+
+  const qs = getPayTypeQuery() + getJobNoQuery();
+  window.open(
+    `/api/reports/worker-payslip/pdf?companyId=${companyId}&workerId=${workerId}&start=${startDate}&end=${endDate}${qs}`,
+    "_blank"
+  );
+}
+
+
 /* -----------------------------
    Boot
 ------------------------------ */
@@ -428,6 +674,8 @@ document.addEventListener("DOMContentLoaded", () => {
     if (selectedReport === "worker-monthly-pays") return previewWorkerMonthlyPays();
     if (selectedReport === "sales-listing") return previewSalesListing();
     if (selectedReport === "account-worker-job-listing") return previewWorkerJobListing();
+    if (selectedReport === "monthly-summary") return previewMonthlySummary();
+    if (selectedReport === "worker-payslip") return previewWorkerPayslip();
     alert("This report is not implemented yet.");
   });
 
@@ -435,8 +683,11 @@ document.addEventListener("DOMContentLoaded", () => {
     if (selectedReport === "worker-monthly-pays") return exportWorkerMonthlyPaysPdf();
     if (selectedReport === "sales-listing") return exportSalesListingPdf();
     if (selectedReport === "account-worker-job-listing") return exportWorkerJobListingPdf();
+    if (selectedReport === "monthly-summary") return exportMonthlySummaryPdf();
+    if (selectedReport === "worker-payslip") return exportWorkerPayslipPdf();
     alert("This report is not implemented yet.");
   });
+
 
   // wirePayFilterAutoPreview();
 });
