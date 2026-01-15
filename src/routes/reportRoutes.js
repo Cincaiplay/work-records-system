@@ -1433,6 +1433,4 @@ router.get("/worker-payslip/pdf", async (req, res) => {
 });
 
 
-
-
 export default router;

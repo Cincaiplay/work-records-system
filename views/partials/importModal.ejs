@@ -1,0 +1,71 @@
+<!-- Import Preview Modal (shared for workers/jobs) -->
+<div class="modal fade" id="importModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-scrollable modal-xl">
+    <div class="modal-content rounded-3">
+      <div class="modal-header">
+        <h5 class="modal-title" id="importModalTitle">Import Preview</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+
+      <div class="modal-body">
+        <!-- Step 1: choose file -->
+        <div class="d-flex flex-wrap gap-2 align-items-center mb-3">
+          <input class="form-control" type="file" id="importFile" accept=".csv" style="max-width:420px;" />
+          <button class="btn btn-primary" type="button" onclick="previewImport()">
+            <i class="bi bi-eye me-1"></i> Preview
+          </button>
+          <div class="text-muted small" id="importPreviewMsg">Choose a CSV file and click Preview.</div>
+        </div>
+
+        <!-- Summary -->
+        <div id="importSummary" style="display:none;">
+          <div class="row g-2 mb-3">
+            <div class="col-md-3">
+              <div class="border rounded p-2 bg-light">
+                <div class="small text-muted">Total rows</div>
+                <div class="fw-semibold" id="sumTotal">0</div>
+              </div>
+            </div>
+            <div class="col-md-3">
+              <div class="border rounded p-2 bg-light">
+                <div class="small text-muted">Will insert</div>
+                <div class="fw-semibold text-success" id="sumInsert">0</div>
+              </div>
+            </div>
+            <div class="col-md-3">
+              <div class="border rounded p-2 bg-light">
+                <div class="small text-muted">Will update</div>
+                <div class="fw-semibold text-primary" id="sumUpdate">0</div>
+              </div>
+            </div>
+            <div class="col-md-3">
+              <div class="border rounded p-2 bg-light">
+                <div class="small text-muted">Errors</div>
+                <div class="fw-semibold text-danger" id="sumErrors">0</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Preview Table -->
+        <div class="table-responsive" id="importPreviewTable" style="display:none;">
+          <table class="table table-sm table-bordered align-middle mb-0">
+            <thead class="table-light" id="importPreviewHead"></thead>
+            <tbody id="importPreviewBody"></tbody>
+          </table>
+        </div>
+
+        <div class="text-muted small mt-2">
+          Tip: extra CSV columns are allowed. Empty optional fields are ignored.
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+        <button type="button" class="btn btn-success" id="btnConfirmImport" onclick="confirmImport()" disabled>
+          <i class="bi bi-check2-circle me-1"></i> Confirm Import
+        </button>
+      </div>
+    </div>
+  </div>
+</div>

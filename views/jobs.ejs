@@ -54,12 +54,29 @@
       </div>
 
       <div class="col-lg-4 col-md-12 mt-3 mt-lg-0 text-md-start text-lg-end">
-        <button class="btn btn-outline-secondary rounded-pill" disabled title="Later">
-          <i class="bi bi-upload"></i> Import
-        </button>
-        <button class="btn btn-outline-secondary rounded-pill" disabled title="Later">
-          <i class="bi bi-download"></i> Export
-        </button>
+        <div class="d-flex gap-2">
+          <button
+            class="btn btn-outline-secondary rounded-pill"
+            onclick="downloadTemplate('jobs')"
+          >
+            <i class="bi bi-file-earmark-text me-1"></i> CSV Template
+          </button>
+
+          <button
+            class="btn btn-outline-primary rounded-pill"
+            onclick="openImportModal('jobs')"
+          >
+            <i class="bi bi-upload me-1"></i> Import CSV
+          </button>
+
+          <button
+            class="btn btn-outline-success rounded-pill"
+            onclick="window.location.href='/api/jobs/export?companyId=' + (window.getCurrentCompanyId?.() || 1)"
+          >
+            <i class="bi bi-download me-1"></i> Export
+          </button>
+        </div>
+
       </div>
     </div>
 
@@ -173,9 +190,13 @@
     </div>
   </div>
 
+  <!-- Import Preview Modal -->
+  <%- include("partials/importModal"); %>
+  
   <!-- Scripts -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="/js/company-switcher.js"></script>
+  <script src="/js/importExport.js"></script>
   <script src="/js/jobs.js"></script>
 </body>
 </html>

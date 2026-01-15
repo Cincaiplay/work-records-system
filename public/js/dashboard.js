@@ -532,20 +532,17 @@ window.addEntryToTable = async function () {
 
   const hasCustomWage = useCustomOverride?.checked && Number.parseFloat(customWageRateInput?.value) > 0;
 
-  if (lines.length > 1 && enabledCompanyRules.includes("MULTI_JOB_LOWEST_TIER_OTHERS_5050") && !hasCustomWage) {
-    let minRate = Infinity;
-    let minIdx = 0;
-    lines.forEach((x, idx) => {
-      if (x.wage_rate < minRate) {
-        minRate = x.wage_rate;
-        minIdx = idx;
-      }
-    });
-
-    lines.forEach((x, idx) => {
-      if (idx !== minIdx) x.wage_rate = x.customer_rate * 0.5;
-    });
+  if (
+    lines.length > 1 &&
+    enabledCompanyRules.includes("MULTI_JOB_LOWEST_TIER_OTHERS_5050") &&
+    !hasCustomWage
+  ) {
+    // Apply "others 50/50" + "extra hours of cheapest job also 50/50"
+    // We do NOT split lines; we compute blended totals and set avg wage_rate.
+    // This matches your example: cheapest job keeps base for first hour only.
+    applyMultiJob5050WithExtraHours(lines);
   }
+
 
   if (useCustomOverride?.checked) {
     const customWage = parseFloat(customWageRateInput?.value);
@@ -556,8 +553,11 @@ window.addEntryToTable = async function () {
 
   const jobs = lines.map((x) => ({
     ...x,
-    wage_total: x.wage_rate * x.hours,
+    wage_total: Number.isFinite(Number(x.wage_total))
+      ? Number(x.wage_total)
+      : (Number(x.wage_rate) || 0) * (Number(x.hours) || 0),
   }));
+
 
   pendingEntries.push({
     header: {
@@ -1383,6 +1383,17 @@ window.addBatchRowsToPending = async function () {
       }
     }
 
+    const hasCustomWageOverride = false; 
+    // (batch mode: “custom override” is basically handled by wage_rate/cust_rate cell values already)
+
+    if (
+      jobs.length > 1 &&
+      enabledCompanyRules.includes("MULTI_JOB_LOWEST_TIER_OTHERS_5050") &&
+      !hasCustomWageOverride
+    ) {
+      applyMultiJob5050WithExtraHours(jobs);
+    }
+
 
     if (!jobs.length) continue;
 
@@ -1439,6 +1450,79 @@ window.addBatchRowsToPending = async function () {
 /* =========================
    BASE WAGE HELPERS
    ========================= */
+
+function applyMultiJob5050WithExtraHours(jobs) {
+  // jobs: [{ hours, customer_rate, wage_rate, wage_total, ... }]
+  // Rule:
+  // - If multiple jobs:
+  //   - Find the lowest BASE wage_rate job (before any 50/50 changes)
+  //   - All other jobs => wage_rate = customer_rate * 0.5
+  //   - Lowest job:
+  //       first 1 hour = base wage_rate
+  //       remaining hours (if any) = 50/50
+  //     wage_total becomes blended, wage_rate becomes avg = wage_total / hours
+
+  if (!Array.isArray(jobs) || jobs.length <= 1) return;
+
+  // capture original/base wage rates for comparison
+  const baseRates = jobs.map((j) => Number(j.wage_rate || 0));
+  let minIdx = 0;
+  let minRate = Infinity;
+
+  baseRates.forEach((r, idx) => {
+    if (Number.isFinite(r) && r > 0 && r < minRate) {
+      minRate = r;
+      minIdx = idx;
+    }
+  });
+
+  // if we can't find a valid min rate, do nothing
+  if (!Number.isFinite(minRate) || minRate <= 0) return;
+
+  for (let i = 0; i < jobs.length; i++) {
+    const j = jobs[i];
+    const hours = Number(j.hours || 0);
+    const cust = Number(j.customer_rate || 0);
+    const base = Number(baseRates[i] || 0);
+
+    if (!Number.isFinite(hours) || hours <= 0) continue;
+    if (!Number.isFinite(cust) || cust <= 0) continue;
+
+    if (i !== minIdx) {
+      // other jobs => 50/50 all hours
+      const r5050 = cust * 0.5;
+      j.wage_rate = r5050;
+      j.wage_total = r5050 * hours;
+      j.rate = j.wage_rate;
+      j.pay = j.wage_total;
+      continue;
+    }
+
+    // cheapest job: first 1 hour base, rest 50/50 (if any)
+    if (!Number.isFinite(base) || base <= 0) continue;
+
+    if (hours <= 1) {
+      j.wage_rate = base;
+      j.wage_total = base * hours;
+      j.rate = j.wage_rate;
+      j.pay = j.wage_total;
+      continue;
+    }
+
+    const extraHours = hours - 1;
+    const r5050 = cust * 0.5;
+    const blendedTotal = base * 1 + r5050 * extraHours;
+
+    j.wage_total = blendedTotal;
+
+    // show an average wage_rate so UI/exports look consistent
+    j.wage_rate = blendedTotal / hours;
+
+    j.rate = j.wage_rate;
+    j.pay = j.wage_total;
+  }
+}
+
 
 function getBaseWageRate(job, worker) {
   const tierId = worker?.wage_tier_id;

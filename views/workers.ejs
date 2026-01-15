@@ -44,7 +44,7 @@
       </div>
 
       <div class="col-lg-4 col-md-12 mt-3 mt-lg-0 text-md-start text-lg-end">
-        <div class="d-inline-block me-2">
+        <div class="d-inline-block me-2 d-none">
           <button class="btn btn-outline-secondary rounded-pill dropdown-toggle"
                   type="button"
                   data-bs-toggle="dropdown"
@@ -58,9 +58,26 @@
           </ul>
         </div>
 
-        <button class="btn btn-outline-secondary rounded-pill" disabled title="Later">
-          <i class="bi bi-download"></i> Export
-        </button>
+        <div class="d-inline-flex gap-2">
+          <button class="btn btn-outline-secondary rounded-pill"
+                  type="button"
+                  onclick="downloadTemplate('workers')">
+            <i class="bi bi-download"></i> CSV Template
+          </button>
+
+          <button class="btn btn-outline-primary rounded-pill"
+                  type="button"
+                  onclick="openImportModal('workers')">
+            <i class="bi bi-upload"></i> Import CSV
+          </button>
+
+          <button class="btn btn-outline-success rounded-pill"
+                  type="button"
+                  onclick="window.exportCsv('workers')">
+            <i class="bi bi-download"></i> Export
+          </button>
+
+        </div>
       </div>
     </div>
 
@@ -200,8 +217,14 @@
     </div>
   </div>
 
+
+  <!-- Import Preview Modal -->
+  <%- include("partials/importModal"); %>
+
+
   <!-- Scripts -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="/js/importExport.js"></script>
   <script src="/js/company-switcher.js"></script>
   <script src="/js/workers.js"></script>
 </body>
