@@ -89,15 +89,6 @@ function payWhereSql(payFilter) {
   return ""; // BOTH
 }
 
-/**
- * IMPORTANT (schema note):
- * Work entries are split into:
- *  - work_entries (header: worker_id, work_date, job_no1, job_no2, is_bank, fees_collected, ...)
- *  - work_entry_jobs (lines: job_id, hours, customer_total, wage_total, ...)
- *
- * Reports must aggregate from work_entry_jobs joined to work_entries.
- */
-
 function baseFromJoinSql() {
   return `
     FROM work_entries we
@@ -112,8 +103,11 @@ function jobsLeftJoinSql() {
   `;
 }
 
+
 /* -----------------------------
-   Worker Monthly Pays
+   Worker Monthly Pays (FIXED for your schema)
+   - cash_wage = sum wages where we.is_bank = 0
+   - bank_wage = sum wages where we.is_bank = 1
 ------------------------------ */
 function queryWorkerMonthlyPays({ companyId, start, end, payFilter, jobNoFilter }) {
   return new Promise((resolve, reject) => {
@@ -124,9 +118,27 @@ function queryWorkerMonthlyPays({ companyId, start, end, payFilter, jobNoFilter 
       SELECT
         w.worker_code AS worker_code,
         COALESCE(w.worker_name, w.worker_english_name, '') AS worker_name,
+
         SUM(COALESCE(wej.hours, 0)) AS total_hours,
         SUM(COALESCE(wej.customer_total, 0)) AS total_customer,
-        SUM(COALESCE(wej.wage_total, wej.pay, 0)) AS total_wage
+        SUM(COALESCE(wej.wage_total, wej.pay, 0)) AS total_wage,
+
+        -- ✅ cash out wage (is_bank = 0)
+        SUM(
+          CASE WHEN COALESCE(we.is_bank,0) = 0
+            THEN COALESCE(wej.wage_total, wej.pay, 0)
+            ELSE 0
+          END
+        ) AS cash_wage,
+
+        -- ✅ bank out wage (is_bank = 1)
+        SUM(
+          CASE WHEN COALESCE(we.is_bank,0) = 1
+            THEN COALESCE(wej.wage_total, wej.pay, 0)
+            ELSE 0
+          END
+        ) AS bank_wage
+
       ${baseFromJoinSql()}
       WHERE we.company_id = ?
         AND date(we.work_date) >= date(?)
@@ -168,6 +180,8 @@ router.get("/worker-monthly-pays", async (req, res) => {
         total_hours: num(r.total_hours),
         total_customer: num(r.total_customer),
         total_wage: num(r.total_wage),
+        cash_wage: num(r.cash_wage),
+        bank_wage: num(r.bank_wage),
       })),
     });
   } catch (err) {
@@ -176,12 +190,19 @@ router.get("/worker-monthly-pays", async (req, res) => {
   }
 });
 
+
+// ==============================
+// Worker Monthly Pays (PDF)
+// GET /api/reports/worker-monthly-pays/pdf?companyId=1&start=YYYY-MM-DD&end=YYYY-MM-DD&cash=1&bank=1&jobno1=1&jobno2=1
+// Optional: &showVouchers=1 (only if your queryWorkerMonthlyPays returns voucher1_wage/voucher2_wage)
+// ==============================
 router.get("/worker-monthly-pays/pdf", async (req, res) => {
   try {
     const companyId = Number(req.query.companyId || 1);
     const start = req.query.start;
     const end = req.query.end;
 
+    const showVouchers = String(req.query.showVouchers || "") === "1";
     const { payFilter } = await resolvePayFilter(req);
     const jobNoFilter = resolveJobNoFilter(req);
 
@@ -190,9 +211,16 @@ router.get("/worker-monthly-pays/pdf", async (req, res) => {
       return res.status(400).send("Invalid start/end date (use YYYY-MM-DD)");
     if (start > end) return res.status(400).send("Start date cannot be after end date");
 
+    const companyName = await new Promise((resolve) => {
+      db.get("SELECT name FROM companies WHERE id = ?", [companyId], (err, row) => {
+        if (err) return resolve("");
+        resolve(String(row?.name || "").trim());
+      });
+    });
+
     const rows = await queryWorkerMonthlyPays({ companyId, start, end, payFilter, jobNoFilter });
 
-    const filename = `Worker_Monthly_Pays_${companyId}_${start}_to_${end}.pdf`;
+    const filename = `Worker_Monthly_Pays_${companyName || companyId}_${start}_to_${end}.pdf`;
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
 
@@ -203,71 +231,181 @@ router.get("/worker-monthly-pays/pdf", async (req, res) => {
     doc.registerFont("NotoSC", fontPath);
     doc.font("NotoSC");
 
-    doc.fontSize(16).text("Worker Monthly Pays 技师的提成", { align: "left" });
-    doc.moveDown(0.3);
+    const fmt2 = (v) => num(v).toFixed(2);
+
+    /* ================= Header ================= */
+    doc.fontSize(16).text("Worker Monthly Pays 工资结单", { align: "center" });
+    doc.moveDown(0.35);
+
     doc.fontSize(10).fillColor("#555").text(
-      `Company ID: ${companyId}    Date: ${formatDMY(start)} - ${formatDMY(end)}`
+      `${companyName ? `Company: ${companyName}` : `Company ID: ${companyId}`}    Date: ${formatDMY(
+        start
+      )} - ${formatDMY(end)}`,
+      { align: "center" }
     );
     doc.fillColor("#000");
     doc.moveDown(1);
 
-    const pageWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
-    const col = { no: 30, code: 70, name: 180, hours: 70, cust: 90, wage: 90 };
-    const startX = doc.page.margins.left;
+    /* ================= Table layout ================= */
+    const pageW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+    const x0 = doc.page.margins.left;
     let y = doc.y;
+    const rowH = 16;
 
-    const drawRow = (cells, isHeader = false) => {
-      const rowH = 18;
-      const fontSize = isHeader ? 10 : 9;
+    let col = showVouchers
+      ? {
+          code: 70,
+          name: 160,
+          hours: 60,
+          cust: 90,
+          wage: 80,
+          cash: 90,
+          bank: 110,
+          v1: 60,
+          v2: 60,
+        }
+      : {
+          code: 75,
+          name: 190,
+          hours: 60,
+          cust: 95,
+          wage: 85,
+          cash: 95,
+          bank: 120,
+        };
 
-      if (isHeader) {
+    // auto-scale columns to fit page width
+    const sumW = Object.values(col).reduce((s, w) => s + w, 0);
+    if (sumW > pageW) {
+      const scale = pageW / sumW;
+      Object.keys(col).forEach((k) => {
+        col[k] = Math.max(22, Math.floor(col[k] * scale));
+      });
+    }
+
+    const diff = pageW - Object.values(col).reduce((s, w) => s + w, 0);
+    col.name += diff; // absorb rounding error
+
+    const bottomLimit = () => doc.page.height - doc.page.margins.bottom - 30;
+    const ensureRow = () => {
+      if (y + rowH > bottomLimit()) {
+        doc.addPage();
+        y = doc.page.margins.top;
+        drawHeader();
+      }
+    };
+
+    const drawCell = ({ text, x, y0, w, align = "left", bg = null, fontSize = 9 }) => {
+      if (bg) {
         doc.save();
-        doc.rect(startX, y - 2, pageWidth, rowH + 4).fill("#E9F2FF");
+        doc.rect(x, y0, w, rowH).fill(bg);
         doc.restore();
       }
+      doc.save();
+      doc.lineWidth(0.6).strokeColor("#999");
+      doc.rect(x, y0, w, rowH).stroke();
+      doc.restore();
 
-      doc.font("NotoSC").fontSize(fontSize).fillColor("#000");
+      doc.font("NotoSC").fontSize(fontSize);
+      doc.text(String(text ?? ""), x + 4, y0 + 3, {
+        width: w - 8,
+        align,
+        ellipsis: true,
+      });
+    };
 
-      let x = startX;
-      doc.text(cells[0], x, y, { width: col.no, align: "left" }); x += col.no;
-      doc.text(cells[1], x, y, { width: col.code, align: "left" }); x += col.code;
-      doc.text(cells[2], x, y, { width: col.name, align: "left" }); x += col.name;
-      doc.text(cells[3], x, y, { width: col.hours, align: "right" }); x += col.hours;
-      doc.text(cells[4], x, y, { width: col.cust, align: "right" }); x += col.cust;
-      doc.text(cells[5], x, y, { width: col.wage, align: "right" });
+    const drawHeader = () => {
+      const bg = "#E9F2FF";
+      const hf = 8;
+      let x = x0;
+
+      drawCell({ text: "工号", x, y0: y, w: col.code, align: "center", bg, fontSize: hf }); x += col.code;
+      drawCell({ text: "技师名", x, y0: y, w: col.name, align: "center", bg, fontSize: hf }); x += col.name;
+      drawCell({ text: "钟点", x, y0: y, w: col.hours, align: "center", bg, fontSize: hf }); x += col.hours;
+      drawCell({ text: "收费", x, y0: y, w: col.cust, align: "center", bg, fontSize: hf }); x += col.cust;
+      drawCell({ text: "总工钱", x, y0: y, w: col.wage, align: "center", bg, fontSize: hf }); x += col.wage;
+      drawCell({ text: "现金出工钱", x, y0: y, w: col.cash, align: "center", bg, fontSize: hf }); x += col.cash;
+      drawCell({ text: "支票/转账工钱", x, y0: y, w: col.bank, align: "center", bg, fontSize: hf }); x += col.bank;
+
+      if (showVouchers) {
+        drawCell({ text: "支票1", x, y0: y, w: col.v1, align: "center", bg, fontSize: hf }); x += col.v1;
+        drawCell({ text: "支票2报杂费", x, y0: y, w: col.v2, align: "center", bg, fontSize: hf });
+      }
 
       y += rowH;
     };
 
-    const fmt2 = (v) => num(v).toFixed(2);
+    drawHeader();
 
-    drawRow(["#", "Worker", "Name", "Hours", "Customer", "Wage"], true);
+    /* ================= Rows ================= */
+    let totalHours = 0,
+      totalCustomer = 0,
+      totalWage = 0,
+      totalCash = 0,
+      totalBank = 0,
+      totalV1 = 0,
+      totalV2 = 0;
 
-    let totalHours = 0, totalCustomer = 0, totalWage = 0;
+    rows.forEach((r) => {
+      ensureRow();
 
-    rows.forEach((r, idx) => {
       const h = num(r.total_hours);
       const c = num(r.total_customer);
       const w = num(r.total_wage);
+      const cash = num(r.cash_wage);
+      const bank = num(r.bank_wage);
+      const v1 = showVouchers ? num(r.voucher1_wage) : 0;
+      const v2 = showVouchers ? num(r.voucher2_wage) : 0;
 
       totalHours += h;
       totalCustomer += c;
       totalWage += w;
+      totalCash += cash;
+      totalBank += bank;
+      totalV1 += v1;
+      totalV2 += v2;
 
-      if (y > doc.page.height - doc.page.margins.bottom - 40) {
-        doc.addPage();
-        y = doc.page.margins.top;
-        drawRow(["#", "Worker", "Name", "Hours", "Customer", "Wage"], true);
+      let x = x0;
+      drawCell({ text: r.worker_code || "-", x, y0: y, w: col.code }); x += col.code;
+      drawCell({ text: r.worker_name || "-", x, y0: y, w: col.name }); x += col.name;
+      drawCell({ text: fmt2(h), x, y0: y, w: col.hours, align: "right" }); x += col.hours;
+      drawCell({ text: fmt2(c), x, y0: y, w: col.cust, align: "right" }); x += col.cust;
+      drawCell({ text: fmt2(w), x, y0: y, w: col.wage, align: "right" }); x += col.wage;
+      drawCell({ text: fmt2(cash), x, y0: y, w: col.cash, align: "right" }); x += col.cash;
+      drawCell({ text: fmt2(bank), x, y0: y, w: col.bank, align: "right" }); x += col.bank;
+
+      if (showVouchers) {
+        drawCell({ text: fmt2(v1), x, y0: y, w: col.v1, align: "right" }); x += col.v1;
+        drawCell({ text: fmt2(v2), x, y0: y, w: col.v2, align: "right" });
       }
 
-      drawRow([String(idx + 1), String(r.worker_code || "-"), String(r.worker_name || "-"), fmt2(h), fmt2(c), fmt2(w)]);
+      y += rowH;
     });
 
-    doc.moveDown(1);
-    doc.font("NotoSC").fontSize(10).text(
-      `TOTAL Hours: ${fmt2(totalHours)}    TOTAL Customer: ${fmt2(totalCustomer)}    TOTAL Wage: ${fmt2(totalWage)}`,
-      { align: "right" }
-    );
+    /* ================= Total row ================= */
+    ensureRow();
+    const bg = "#FFF3CD";
+    let x = x0;
+
+    drawCell({
+      text: "本月份总数",
+      x,
+      y0: y,
+      w: col.code + col.name,
+      bg,
+    });
+    x += col.code + col.name;
+
+    drawCell({ text: fmt2(totalHours), x, y0: y, w: col.hours, align: "right", bg }); x += col.hours;
+    drawCell({ text: fmt2(totalCustomer), x, y0: y, w: col.cust, align: "right", bg }); x += col.cust;
+    drawCell({ text: fmt2(totalWage), x, y0: y, w: col.wage, align: "right", bg }); x += col.wage;
+    drawCell({ text: fmt2(totalCash), x, y0: y, w: col.cash, align: "right", bg }); x += col.cash;
+    drawCell({ text: fmt2(totalBank), x, y0: y, w: col.bank, align: "right", bg }); x += col.bank;
+
+    if (showVouchers) {
+      drawCell({ text: fmt2(totalV1), x, y0: y, w: col.v1, align: "right", bg }); x += col.v1;
+      drawCell({ text: fmt2(totalV2), x, y0: y, w: col.v2, align: "right", bg });
+    }
 
     doc.end();
   } catch (err) {
@@ -1124,14 +1262,7 @@ function getWorkerById({ companyId, workerId }) {
   });
 }
 
-function getCompanyNameById(companyId) {
-  return new Promise((resolve) => {
-    db.get("SELECT name FROM companies WHERE id = ?", [companyId], (err, row) => {
-      if (err) return resolve("");
-      resolve(String(row?.name || "").trim());
-    });
-  });
-}
+
 
 function monthTitleFromRange(start, end) {
   // If range spans multiple months, still show end month like Access printouts commonly do.

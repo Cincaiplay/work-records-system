@@ -176,10 +176,12 @@ function renderWorkerMonthlyPaysTable(rows, meta) {
   const totalHours = rows.reduce((s, r) => s + Number(r.total_hours || 0), 0);
   const totalCustomer = rows.reduce((s, r) => s + Number(r.total_customer || 0), 0);
   const totalWage = rows.reduce((s, r) => s + Number(r.total_wage || 0), 0);
+  const totalCash = rows.reduce((s, r) => s + Number(r.cash_wage || 0), 0);
+  const totalBank = rows.reduce((s, r) => s + Number(r.bank_wage || 0), 0);
 
   const title = `
     <div class="mb-3">
-      <div class="fw-bold">Worker Monthly Pays 技师的提成</div>
+      <div class="fw-bold">Worker Monthly Pays 工资结单</div>
       <div class="text-muted small">${meta.startDate} to ${meta.endDate}</div>
     </div>
   `;
@@ -189,40 +191,40 @@ function renderWorkerMonthlyPaysTable(rows, meta) {
       <table class="table table-sm table-hover align-middle">
         <thead class="table-primary small text-uppercase">
           <tr>
-            <th>#</th>
-            <th>Worker Code</th>
+            <th style="width:50px;">#</th>
+            <th style="width:110px;">Worker Code</th>
             <th>Worker Name</th>
-            <th class="text-end">Hours</th>
-            <th class="text-end">Customer Total</th>
-            <th class="text-end">%</th>
-            <th class="text-end">Wage Total</th>
+            <th class="text-end" style="width:110px;">Hours</th>
+            <th class="text-end" style="width:140px;">Customer Total</th>
+            <th class="text-end" style="width:90px;">Wage Total</th>
+            <th class="text-end" style="width:130px;">Cash Wage</th>
+            <th class="text-end" style="width:150px;">Bank/Transfer Wage</th>
           </tr>
         </thead>
+
         <tbody>
-          ${rows.map((r, i) => {
-            const pct = totalCustomer > 0
-              ? (Number(r.total_customer || 0) / totalCustomer) * 100
-              : 0;
-            return `
-              <tr>
-                <td>${i + 1}</td>
-                <td>${r.worker_code || "-"}</td>
-                <td>${r.worker_name || "-"}</td>
-                <td class="text-end">${fmt(r.total_hours)}</td>
-                <td class="text-end">${fmt(r.total_customer)}</td>
-                <td class="text-end">${pct.toFixed(0)}%</td>
-                <td class="text-end fw-semibold">${fmt(r.total_wage)}</td>
-              </tr>
-            `;
-          }).join("")}
+          ${rows.map((r, i) => `
+            <tr>
+              <td>${i + 1}</td>
+              <td>${r.worker_code || "-"}</td>
+              <td>${r.worker_name || "-"}</td>
+              <td class="text-end">${fmt(r.total_hours)}</td>
+              <td class="text-end">${fmt(r.total_customer)}</td>
+              <td class="text-end fw-semibold">${fmt(r.total_wage)}</td>
+              <td class="text-end">${fmt(r.cash_wage)}</td>
+              <td class="text-end">${fmt(r.bank_wage)}</td>
+            </tr>
+          `).join("")}
         </tbody>
+
         <tfoot>
           <tr class="fw-bold">
             <td colspan="3" class="text-end">TOTAL</td>
             <td class="text-end">${fmt(totalHours)}</td>
             <td class="text-end">${fmt(totalCustomer)}</td>
-            <td class="text-end">100%</td>
             <td class="text-end">${fmt(totalWage)}</td>
+            <td class="text-end">${fmt(totalCash)}</td>
+            <td class="text-end">${fmt(totalBank)}</td>
           </tr>
         </tfoot>
       </table>
@@ -231,6 +233,7 @@ function renderWorkerMonthlyPaysTable(rows, meta) {
 
   return title + table;
 }
+
 
 function renderSalesListingHtml(data, meta) {
   const rows = data?.rows || [];
