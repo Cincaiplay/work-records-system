@@ -103,6 +103,27 @@ function jobsLeftJoinSql() {
   `;
 }
 
+function getWorkerById({ companyId, workerId }) {
+  return new Promise((resolve) => {
+    db.get(
+      `SELECT id, worker_code, COALESCE(worker_name, worker_english_name, '') AS worker_name
+       FROM workers
+       WHERE id = ? AND company_id = ?`,
+      [workerId, companyId],
+      (err, row) => {
+        if (err) return resolve(null);
+        resolve(row || null);
+      }
+    );
+  });
+}
+
+function monthTitleFromRange(start, end) {
+  // If range spans multiple months, still show end month like Access printouts commonly do.
+  const m = String(end || start || "").slice(5, 7);
+  const map = { "01":"1","02":"2","03":"3","04":"4","05":"5","06":"6","07":"7","08":"8","09":"9","10":"10","11":"11","12":"12" };
+  return `${map[m] || m} 月份工资结单`;
+}
 
 /* -----------------------------
    Worker Monthly Pays (FIXED for your schema)
@@ -1247,29 +1268,52 @@ function queryWorkerPayslipLines({ companyId, workerId, start, end, payFilter, j
   });
 }
 
-function getWorkerById({ companyId, workerId }) {
-  return new Promise((resolve) => {
-    db.get(
-      `SELECT id, worker_code, COALESCE(worker_name, worker_english_name, '') AS worker_name
-       FROM workers
-       WHERE id = ? AND company_id = ?`,
-      [workerId, companyId],
-      (err, row) => {
-        if (err) return resolve(null);
-        resolve(row || null);
-      }
-    );
+function queryWorkerPayslipLinesGrouped({ companyId, workerId, start, end, payFilter, jobNoFilter }) {
+  return new Promise((resolve, reject) => {
+    const paySql = payWhereSql(payFilter);       // uses alias we
+    const jobNoSql = jobNoWhereSql(jobNoFilter); // uses alias we
+
+    const sql = `
+      SELECT
+        -- Use job_id if exists; fallback to code/type text
+        wej.job_id AS job_id,
+
+        COALESCE(j.job_code, '') AS job_code,
+        COALESCE(j.job_type, '') AS job_type,
+
+        SUM(COALESCE(wej.hours, 0)) AS hours,
+        SUM(COALESCE(wej.customer_total, 0)) AS fee,
+        SUM(COALESCE(wej.wage_total, wej.pay, 0)) AS wage
+
+      FROM work_entries we
+      JOIN work_entry_jobs wej ON wej.work_entry_id = we.id
+      LEFT JOIN jobs j ON j.id = wej.job_id AND j.company_id = we.company_id
+
+      WHERE we.company_id = ?
+        AND we.worker_id = ?
+        AND date(we.work_date) >= date(?)
+        AND date(we.work_date) <= date(?)
+        ${paySql}
+        ${jobNoSql}
+
+      GROUP BY
+        wej.job_id,
+        j.job_code,
+        j.job_type
+
+      ORDER BY
+        COALESCE(j.job_code,''),
+        COALESCE(j.job_type,''),
+        COALESCE(wej.job_id, 0)
+    `;
+
+    db.all(sql, [companyId, workerId, start, end], (err, rows) => {
+      if (err) return reject(err);
+      resolve(rows || []);
+    });
   });
 }
 
-
-
-function monthTitleFromRange(start, end) {
-  // If range spans multiple months, still show end month like Access printouts commonly do.
-  const m = String(end || start || "").slice(5, 7);
-  const map = { "01":"1","02":"2","03":"3","04":"4","05":"5","06":"6","07":"7","08":"8","09":"9","10":"10","11":"11","12":"12" };
-  return `${map[m] || m} 月份工资结单`;
-}
 
 router.get("/worker-payslip", async (req, res) => {
   try {
@@ -1290,7 +1334,7 @@ router.get("/worker-payslip", async (req, res) => {
     const worker = await getWorkerById({ companyId, workerId });
     if (!worker) return res.status(404).json({ error: "Worker not found." });
 
-    const rows = await queryWorkerPayslipLines({ companyId, workerId, start, end, payFilter, jobNoFilter });
+    const rows = await queryWorkerPayslipLinesGrouped({ companyId, workerId, start, end, payFilter, jobNoFilter });
 
     const totals = rows.reduce(
       (acc, r) => {
@@ -1307,8 +1351,6 @@ router.get("/worker-payslip", async (req, res) => {
       worker: { id: worker.id, worker_code: worker.worker_code, worker_name: worker.worker_name },
       title: monthTitleFromRange(start, end),
       rows: rows.map(r => ({
-        work_date: r.work_date,
-        bill_no: r.bill_no,
         job_desc: `${String(r.job_code || "").trim()}${r.job_type ? " - " + String(r.job_type).trim() : ""}`.trim() || "-",
         hours: num(r.hours),
         fee: num(r.fee),
@@ -1316,6 +1358,7 @@ router.get("/worker-payslip", async (req, res) => {
       })),
       totals
     });
+
   } catch (err) {
     console.error("worker-payslip error:", err);
     res.status(500).json({ error: "Failed to generate report" });
@@ -1503,7 +1546,7 @@ router.get("/worker-payslip/pdf", async (req, res) => {
     let tx = x0;
     drawCell("TOTAL", tx, y, col.job, "left"); tx += col.job;
     drawCell(fmt2(totals.total_hours), tx, y, col.hours, "right"); tx += col.hours;
-    drawCell(fmt2(totals.total_fee), tx, y, col.fee, "right"); tx += col.fee;
+    drawCell("", tx, y, col.fee, "right"); tx += col.fee;
     drawCell(fmt2(totals.total_wage), tx, y, col.wage, "right");
     y += rowH;
 

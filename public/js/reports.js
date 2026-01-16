@@ -627,7 +627,7 @@ async function previewWorkerPayslip() {
           <tr class="fw-bold table-warning">
             <td>TOTAL</td>
             <td class="text-end">${fmt(t.total_hours)}</td>
-            <td class="text-end">${fmt(t.total_fee)}</td>
+            <td class="text-end"></td>
             <td class="text-end">${fmt(t.total_wage)}</td>
           </tr>
         </tfoot>
