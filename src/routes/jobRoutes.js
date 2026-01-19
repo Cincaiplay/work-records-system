@@ -1,4 +1,4 @@
-// src/routes/jobRoutes.js
+// src/routes/jobRoutes.js (PostgreSQL)
 import { Router } from "express";
 import db from "../config/db.js";
 import multer from "multer";
@@ -25,7 +25,7 @@ function normalizeWageRates(input) {
       tier_id: Number(x.tier_id),
       wage_rate: Number(x.wage_rate || 0),
     }))
-    .filter((x) => !Number.isNaN(x.tier_id));
+    .filter((x) => Number.isFinite(x.tier_id));
 }
 
 function cleanCell(v) {
@@ -45,10 +45,9 @@ function csvEscape(v) {
   return s;
 }
 
-// ✅ normalize headers so Excel/BOM/spaces won't break keys
 function normalizeHeader(h) {
   return String(h ?? "")
-    .replace(/^\uFEFF/, "") // strip BOM if any
+    .replace(/^\uFEFF/, "")
     .trim()
     .toLowerCase()
     .replace(/\s+/g, "_");
@@ -71,74 +70,73 @@ function asNumberOrNull(v) {
    GET jobs + wages
    GET /api/jobs?companyId=1
 ===================================================== */
-router.get("/", (req, res) => {
+router.get("/", async (req, res) => {
   const companyId = getCompanyId(req);
 
-  db.all(
-    `
-    SELECT
-      j.id AS job_id,
-      j.job_code,
-      j.job_type,
-      j.normal_price,
-      j.normal_price AS customer_rate,
-      j.is_active,
+  try {
+    const r = await db.query(
+      `
+      SELECT
+        j.id AS job_id,
+        j.job_code,
+        j.job_type,
+        j.normal_price,
+        j.normal_price AS customer_rate,
+        j.is_active,
 
-      wt.id AS tier_id,
-      wt.tier_name,
-      COALESCE(jw.wage_rate, 0) AS wage_rate
+        wt.id AS tier_id,
+        wt.tier_name,
+        COALESCE(jw.wage_rate, 0) AS wage_rate
 
-    FROM jobs j
-    LEFT JOIN wage_tiers wt
-      ON wt.company_id = j.company_id
-    LEFT JOIN job_wages jw
-      ON jw.job_id = j.id
-     AND jw.tier_id = wt.id
+      FROM jobs j
+      LEFT JOIN wage_tiers wt
+        ON wt.company_id = j.company_id
+      LEFT JOIN job_wages jw
+        ON jw.job_id = j.id
+       AND jw.tier_id = wt.id
 
-    WHERE j.company_id = ?
-    ORDER BY j.job_code, wt.sort_order, wt.id
-    `,
-    [companyId],
-    (err, rows) => {
-      if (err) {
-        console.error("GET /api/jobs error:", err);
-        return res.status(500).json({ error: "Database error" });
+      WHERE j.company_id = $1
+      ORDER BY j.job_code, wt.sort_order, wt.id
+      `,
+      [companyId]
+    );
+
+    const map = new Map();
+
+    (r.rows || []).forEach((row) => {
+      if (!map.has(row.job_id)) {
+        map.set(row.job_id, {
+          id: row.job_id,
+          job_code: row.job_code,
+          job_type: row.job_type,
+          normal_price: row.normal_price,
+          customer_rate: Number(row.customer_rate || 0),
+          is_active: row.is_active,
+          wage_rates: [],
+        });
       }
 
-      const map = new Map();
+      if (row.tier_id != null) {
+        map.get(row.job_id).wage_rates.push({
+          tier_id: row.tier_id,
+          tier_name: row.tier_name,
+          wage_rate: Number(row.wage_rate || 0),
+        });
+      }
+    });
 
-      (rows || []).forEach((r) => {
-        if (!map.has(r.job_id)) {
-          map.set(r.job_id, {
-            id: r.job_id,
-            job_code: r.job_code,
-            job_type: r.job_type,
-            normal_price: r.normal_price,
-            customer_rate: Number(r.customer_rate || 0),
-            is_active: r.is_active,
-            wage_rates: [],
-          });
-        }
-
-        if (r.tier_id != null) {
-          map.get(r.job_id).wage_rates.push({
-            tier_id: r.tier_id,
-            tier_name: r.tier_name,
-            wage_rate: Number(r.wage_rate),
-          });
-        }
-      });
-
-      res.json([...map.values()]);
-    }
-  );
+    return res.json([...map.values()]);
+  } catch (err) {
+    console.error("GET /api/jobs error:", err);
+    return res.status(500).json({ error: "Database error" });
+  }
 });
 
 /* =====================================================
    CREATE job
    POST /api/jobs
 ===================================================== */
-router.post("/", (req, res) => {
+router.post("/", async (req, res) => {
   const companyId = getCompanyId(req);
   const { job_code, job_type, normal_price, is_active, wage_rates } = req.body;
 
@@ -148,84 +146,134 @@ router.post("/", (req, res) => {
 
   const rates = normalizeWageRates(wage_rates);
 
-  db.run(
-    `
-    INSERT INTO jobs (company_id, job_code, job_type, normal_price, is_active)
-    VALUES (?, ?, ?, ?, ?)
-    `,
-    [companyId, job_code, job_type, Number(normal_price || 0), Number(is_active ?? 1)],
-    function (err) {
-      if (err) return res.status(500).json({ error: err.message });
+  try {
+    let createdId = null;
 
-      const jobId = this.lastID;
+    await db.tx(async (client) => {
+      const ins = await client.query(
+        `
+        INSERT INTO jobs (company_id, job_code, job_type, normal_price, is_active)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id
+        `,
+        [companyId, job_code, job_type, Number(normal_price || 0), Number(is_active ?? 1)]
+      );
 
-      const stmt = db.prepare(`
-        INSERT INTO job_wages (company_id, job_id, tier_id, wage_rate)
-        VALUES (?, ?, ?, ?)
-      `);
+      createdId = ins.rows[0].id;
 
-      rates.forEach((r) => stmt.run(companyId, jobId, r.tier_id, r.wage_rate));
-      stmt.finalize();
+      for (const r of rates) {
+        await client.query(
+          `
+          INSERT INTO job_wages (company_id, job_id, tier_id, wage_rate)
+          VALUES ($1, $2, $3, $4)
+          ON CONFLICT (job_id, tier_id)
+          DO UPDATE SET wage_rate = EXCLUDED.wage_rate
+          `,
+          [companyId, createdId, r.tier_id, r.wage_rate]
+        );
+      }
+    });
 
-      res.status(201).json({ id: jobId });
+    return res.status(201).json({ id: createdId });
+  } catch (err) {
+    // unique_violation (company_id, job_code)
+    if (err?.code === "23505") {
+      return res.status(409).json({ error: "job_code must be unique for this company." });
     }
-  );
+    console.error("POST /api/jobs error:", err);
+    return res.status(500).json({ error: "Database error" });
+  }
 });
 
 /* =====================================================
    UPDATE job
    PUT /api/jobs/:id
 ===================================================== */
-router.put("/:id", (req, res) => {
+router.put("/:id", async (req, res) => {
   const companyId = getCompanyId(req);
   const jobId = Number(req.params.id);
   const { job_code, job_type, normal_price, is_active, wage_rates } = req.body;
 
+  if (!jobId) return res.status(400).json({ error: "Invalid job id" });
+  if (!job_code || !job_type) {
+    return res.status(400).json({ error: "job_code and job_type required" });
+  }
+
   const rates = normalizeWageRates(wage_rates);
 
-  db.run(
-    `
-    UPDATE jobs SET
-      job_code = ?, job_type = ?, normal_price = ?, is_active = ?
-    WHERE id = ? AND company_id = ?
-    `,
-    [job_code, job_type, Number(normal_price || 0), Number(is_active ?? 1), jobId, companyId],
-    function (err) {
-      if (err) return res.status(500).json({ error: err.message });
-      if (!this.changes) return res.status(404).json({ error: "Job not found" });
+  try {
+    await db.tx(async (client) => {
+      const upd = await client.query(
+        `
+        UPDATE jobs
+           SET job_code = $1,
+               job_type = $2,
+               normal_price = $3,
+               is_active = $4
+         WHERE id = $5
+           AND company_id = $6
+        `,
+        [job_code, job_type, Number(normal_price || 0), Number(is_active ?? 1), jobId, companyId]
+      );
 
-      const stmt = db.prepare(`
-        INSERT INTO job_wages (company_id, job_id, tier_id, wage_rate)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(job_id, tier_id)
-        DO UPDATE SET wage_rate = excluded.wage_rate
-      `);
+      if (upd.rowCount === 0) {
+        const e = new Error("NOT_FOUND");
+        throw e;
+      }
 
-      rates.forEach((r) => stmt.run(companyId, jobId, r.tier_id, r.wage_rate));
-      stmt.finalize();
+      for (const r of rates) {
+        await client.query(
+          `
+          INSERT INTO job_wages (company_id, job_id, tier_id, wage_rate)
+          VALUES ($1, $2, $3, $4)
+          ON CONFLICT (job_id, tier_id)
+          DO UPDATE SET wage_rate = EXCLUDED.wage_rate
+          `,
+          [companyId, jobId, r.tier_id, r.wage_rate]
+        );
+      }
+    });
 
-      res.json({ message: "Job updated" });
+    return res.json({ message: "Job updated" });
+  } catch (err) {
+    if (err?.message === "NOT_FOUND") {
+      return res.status(404).json({ error: "Job not found" });
     }
-  );
+    if (err?.code === "23505") {
+      return res.status(409).json({ error: "job_code must be unique for this company." });
+    }
+    console.error("PUT /api/jobs error:", err);
+    return res.status(500).json({ error: "Database error" });
+  }
 });
 
 /* =====================================================
    DELETE job
    DELETE /api/jobs/:id
 ===================================================== */
-router.delete("/:id", (req, res) => {
+router.delete("/:id", async (req, res) => {
   const companyId = getCompanyId(req);
   const jobId = Number(req.params.id);
 
-  db.run(
-    `DELETE FROM jobs WHERE id = ? AND company_id = ?`,
-    [jobId, companyId],
-    function (err) {
-      if (err) return res.status(500).json({ error: err.message });
-      if (!this.changes) return res.status(404).json({ error: "Not found" });
-      res.json({ message: "Deleted" });
+  if (!jobId) return res.status(400).json({ error: "Invalid job id" });
+
+  try {
+    const r = await db.query(
+      `DELETE FROM jobs WHERE id = $1 AND company_id = $2`,
+      [jobId, companyId]
+    );
+
+    if (r.rowCount === 0) return res.status(404).json({ error: "Not found" });
+
+    return res.json({ message: "Deleted" });
+  } catch (err) {
+    // FK violations if work_entry_jobs references this job
+    if (err?.code === "23503") {
+      return res.status(409).json({ error: "Cannot delete: job is referenced by work entries." });
     }
-  );
+    console.error("DELETE /api/jobs error:", err);
+    return res.status(500).json({ error: "Database error" });
+  }
 });
 
 /* =====================================================
@@ -239,47 +287,33 @@ router.get("/export", async (req, res) => {
       return res.status(400).send("Invalid companyId");
     }
 
-    // 🔹 1. Get company name
-    const company = await new Promise((resolve, reject) => {
-      db.get(
-        `SELECT name FROM companies WHERE id = ?`,
-        [companyId],
-        (err, row) => (err ? reject(err) : resolve(row))
-      );
-    });
+    const c = await db.query(`SELECT name FROM companies WHERE id = $1`, [companyId]);
+    const companyName = c.rows[0]?.name || `company_${companyId}`;
 
-    const companyName = company?.name || `company_${companyId}`;
-
-    // 🔹 sanitize filename (remove slashes, spaces → _)
-    const safeCompanyName = companyName
+    const safeCompanyName = String(companyName)
       .replace(/[^\w\d]+/g, "_")
       .replace(/^_+|_+$/g, "");
 
-    // 🔹 2. Get jobs
-    const rows = await new Promise((resolve, reject) => {
-      db.all(
-        `SELECT job_code, job_type, normal_price
-         FROM jobs
-         WHERE company_id = ?
-         ORDER BY job_code ASC`,
-        [companyId],
-        (err, r) => (err ? reject(err) : resolve(r || []))
-      );
-    });
+    const r = await db.query(
+      `
+      SELECT job_code, job_type, normal_price
+        FROM jobs
+       WHERE company_id = $1
+       ORDER BY job_code ASC
+      `,
+      [companyId]
+    );
+
+    const rows = r.rows || [];
 
     const header = ["job_code", "job_type", "normal_price"].join(",");
 
     const body = rows
-      .map((r) =>
-        [
-          r.job_code ?? "",
-          r.job_type ?? "",
-          r.normal_price ?? "",
-        ].map(csvEscape).join(",")
+      .map((x) =>
+        [x.job_code ?? "", x.job_type ?? "", x.normal_price ?? ""].map(csvEscape).join(",")
       )
       .join("\n");
 
-    // 🔹 3. UTF-8 BOM for Excel
     const csv = "\ufeff" + header + "\n" + body + "\n";
 
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
@@ -288,13 +322,12 @@ router.get("/export", async (req, res) => {
       `attachment; filename="${safeCompanyName}_jobs.csv"`
     );
 
-    res.send(csv);
+    return res.send(csv);
   } catch (err) {
     console.error("jobs export error:", err);
-    res.status(500).send("Failed to export jobs");
+    return res.status(500).send("Failed to export jobs");
   }
 });
-
 
 /* =====================================================
    CSV Template
@@ -323,11 +356,10 @@ router.post("/import", upload.single("file"), async (req, res) => {
     if (!companyId || companyId <= 0) return res.status(400).json({ error: "Invalid companyId" });
     if (!req.file?.buffer) return res.status(400).json({ error: "Missing file" });
 
-    // ✅ IMPORTANT: handle BOM in file content so first header doesn't become \ufeffjob_code
     const text = req.file.buffer.toString("utf8").replace(/^\uFEFF/, "");
 
     const recordsRaw = parse(text, {
-      bom: true, // ✅ extra safety (csv-parse supports it)
+      bom: true,
       columns: (headers) => headers.map(normalizeHeader),
       skip_empty_lines: true,
       trim: true,
@@ -339,77 +371,86 @@ router.post("/import", upload.single("file"), async (req, res) => {
     let inserted = 0;
     let updated = 0;
 
-    for (let i = 0; i < records.length; i++) {
-      const r = records[i];
-      const rowNo = i + 2;
+    await db.tx(async (client) => {
+      for (let i = 0; i < records.length; i++) {
+        const r = records[i];
+        const rowNo = i + 2;
 
-      const job_code = asTrimOrNull(r.job_code);
-      const job_type = asTrimOrNull(r.job_type);
-      const normal_price = asNumberOrNull(r.normal_price);
+        const job_code = asTrimOrNull(r.job_code);
+        const job_type = asTrimOrNull(r.job_type);
+        const normal_price = asNumberOrNull(r.normal_price);
 
-      if (!job_code) {
-        errors.push({ row: rowNo, field: "job_code", error: "Required" });
-        continue;
-      }
-      if (!job_type) {
-        errors.push({ row: rowNo, field: "job_type", error: "Required" });
-        continue;
-      }
-      if (normal_price === "__INVALID__") {
-        errors.push({ row: rowNo, field: "normal_price", error: "Must be a number" });
-        continue;
-      }
-
-      const existing = await new Promise((resolve, reject) => {
-        db.get(
-          `SELECT id FROM jobs
-           WHERE company_id = ? AND lower(job_code) = lower(?)`,
-          [companyId, job_code],
-          (err, row) => (err ? reject(err) : resolve(row || null))
-        );
-      });
-
-      if (!existing) {
-        await new Promise((resolve, reject) => {
-          db.run(
-            `INSERT INTO jobs (company_id, job_code, job_type, normal_price)
-             VALUES (?, ?, ?, ?)`,
-            [companyId, job_code, job_type, normal_price ?? null],
-            (err) => (err ? reject(err) : resolve())
-          );
-        });
-        inserted++;
-      } else {
-        const fields = [];
-        const values = [];
-
-        fields.push("job_type = ?");
-        values.push(job_type);
-
-        if (normal_price !== null) {
-          fields.push("normal_price = ?");
-          values.push(normal_price);
+        if (!job_code) {
+          errors.push({ row: rowNo, field: "job_code", error: "Required" });
+          continue;
+        }
+        if (!job_type) {
+          errors.push({ row: rowNo, field: "job_type", error: "Required" });
+          continue;
+        }
+        if (normal_price === "__INVALID__") {
+          errors.push({ row: rowNo, field: "normal_price", error: "Must be a number" });
+          continue;
         }
 
-        values.push(existing.id);
+        const existing = await client.query(
+          `
+          SELECT id
+            FROM jobs
+           WHERE company_id = $1
+             AND lower(job_code) = lower($2)
+           LIMIT 1
+          `,
+          [companyId, job_code]
+        );
 
-        await new Promise((resolve, reject) => {
-          db.run(`UPDATE jobs SET ${fields.join(", ")} WHERE id = ?`, values, (err) =>
-            err ? reject(err) : resolve()
+        if (existing.rowCount === 0) {
+          await client.query(
+            `
+            INSERT INTO jobs (company_id, job_code, job_type, normal_price)
+            VALUES ($1, $2, $3, $4)
+            `,
+            [companyId, job_code, job_type, normal_price ?? null]
           );
-        });
-        updated++;
+          inserted++;
+        } else {
+          const id = existing.rows[0].id;
+
+          // dynamic update like your sqlite logic
+          const sets = [];
+          const values = [];
+          let p = 1;
+
+          sets.push(`job_type = $${p++}`); values.push(job_type);
+
+          if (normal_price !== null) {
+            sets.push(`normal_price = $${p++}`); values.push(normal_price);
+          }
+
+          values.push(id);
+
+          await client.query(
+            `UPDATE jobs SET ${sets.join(", ")} WHERE id = $${p}`,
+            values
+          );
+          updated++;
+        }
       }
-    }
 
-    if (errors.length) {
-      return res.status(400).json({ error: "Validation failed", errors });
-    }
+      if (errors.length) {
+        const e = new Error("VALIDATION_FAILED");
+        e._errors = errors;
+        throw e;
+      }
+    });
 
-    res.json({ ok: true, inserted, updated, total: records.length });
+    return res.json({ ok: true, inserted, updated, total: records.length });
   } catch (err) {
+    if (err?.message === "VALIDATION_FAILED") {
+      return res.status(400).json({ error: "Validation failed", errors: err._errors || [] });
+    }
     console.error("jobs import error:", err);
-    res.status(500).json({ error: "Failed to import jobs", details: err.message });
+    return res.status(500).json({ error: "Failed to import jobs", details: err.message });
   }
 });
 
@@ -423,11 +464,10 @@ router.post("/import/preview", upload.single("file"), async (req, res) => {
     if (!companyId || companyId <= 0) return res.status(400).json({ error: "Invalid companyId" });
     if (!req.file?.buffer) return res.status(400).json({ error: "Missing file" });
 
-    // ✅ IMPORTANT: handle BOM
     const text = req.file.buffer.toString("utf8").replace(/^\uFEFF/, "");
 
     const rawRecords = parse(text, {
-      bom: true, // ✅ extra safety
+      bom: true,
       columns: (headers) => headers.map(normalizeHeader),
       skip_empty_lines: true,
       trim: true,
@@ -475,16 +515,18 @@ router.post("/import/preview", upload.single("file"), async (req, res) => {
         continue;
       }
 
-      const exists = await new Promise((resolve, reject) => {
-        db.get(
-          `SELECT id FROM jobs
-           WHERE company_id = ? AND lower(job_code)=lower(?)`,
-          [companyId, job_code],
-          (err, row) => (err ? reject(err) : resolve(!!row))
-        );
-      });
+      const exists = await db.query(
+        `
+        SELECT 1
+          FROM jobs
+         WHERE company_id = $1
+           AND lower(job_code) = lower($2)
+         LIMIT 1
+        `,
+        [companyId, job_code]
+      );
 
-      const action = exists ? "UPDATE" : "INSERT";
+      const action = exists.rowCount > 0 ? "UPDATE" : "INSERT";
       if (action === "INSERT") willInsert++;
       else willUpdate++;
 
@@ -498,15 +540,14 @@ router.post("/import/preview", upload.single("file"), async (req, res) => {
       });
     }
 
-    res.json({
+    return res.json({
       ok: true,
       totals: { total: records.length, willInsert, willUpdate, errors },
       rows: preview,
     });
   } catch (err) {
     console.error("jobs import preview error:", err);
-    // ✅ return details so frontend can show real reason if still failing
-    res.status(500).json({ error: "Failed to preview import", details: err.message });
+    return res.status(500).json({ error: "Failed to preview import", details: err.message });
   }
 });
 

@@ -1,55 +1,9 @@
-// src/routes/workEntriesRoutes.js
+// src/routes/workEntryRoutes.js (PostgreSQL)
 import { Router } from "express";
 import db from "../config/db.js";
 import { requirePermission } from "../middleware/permission.js";
 
 const router = Router();
-
-/* =========================
-   SQLite helpers (Promise)
-   ========================= */
-const run = (sql, params = []) =>
-  new Promise((resolve, reject) => {
-    db.run(sql, params, function (err) {
-      if (err) return reject(err);
-      resolve(this);
-    });
-  });
-
-const get = (sql, params = []) =>
-  new Promise((resolve, reject) => {
-    db.get(sql, params, (err, row) => {
-      if (err) return reject(err);
-      resolve(row);
-    });
-  });
-
-const all = (sql, params = []) =>
-  new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => {
-      if (err) return reject(err);
-      resolve(rows);
-    });
-  });
-
-const exec = (sql) =>
-  new Promise((resolve, reject) => {
-    db.exec(sql, (err) => {
-      if (err) return reject(err);
-      resolve();
-    });
-  });
-
-/* =========================
-   Write queue (IMPORTANT)
-   Prevents "BEGIN within BEGIN"
-   ========================= */
-let writeChain = Promise.resolve();
-function enqueueWrite(fn) {
-  const next = writeChain.then(fn);
-  writeChain = next.catch(() => {}); // keep chain alive
-  return next;
-}
 
 /* =========================
    Company helpers
@@ -67,12 +21,12 @@ function getCompanyId(req) {
   return 1;
 }
 
-function getDaysLimitForUser(req, cb) {
+async function getDaysLimitForUser(req) {
   const userId = req.session?.user?.id;
   const isAdmin = Number(req.session?.user?.is_admin) === 1;
-  if (!userId || isAdmin) return cb(null, null);
+  if (!userId || isAdmin) return null;
 
-  db.get(
+  const r = await db.query(
     `
     SELECT
       us.work_entries_days_limit_override AS override_limit,
@@ -80,23 +34,22 @@ function getDaysLimitForUser(req, cb) {
     FROM users u
     LEFT JOIN user_settings us ON us.user_id = u.id
     LEFT JOIN roles r ON r.id = u.role_id
-    WHERE u.id = ?
+    WHERE u.id = $1
     `,
-    [userId],
-    (err, row) => {
-      if (err) return cb(err);
-
-      const limit =
-        row?.override_limit != null
-          ? Number(row.override_limit)
-          : row?.role_limit != null
-          ? Number(row.role_limit)
-          : null;
-
-      if (!Number.isFinite(limit) || limit <= 0) return cb(null, null);
-      cb(null, limit);
-    }
+    [userId]
   );
+
+  const row = r.rows?.[0];
+
+  const limit =
+    row?.override_limit != null
+      ? Number(row.override_limit)
+      : row?.role_limit != null
+      ? Number(row.role_limit)
+      : null;
+
+  if (!Number.isFinite(limit) || limit <= 0) return null;
+  return limit;
 }
 
 /* =========================
@@ -113,21 +66,21 @@ const toNum = (v) => {
    GET /api/work-entries
    GROUPED: header + child lines
    ========================= */
-router.get("/", (req, res) => {
+router.get("/", async (req, res) => {
   const companyId = getCompanyId(req);
 
-  getDaysLimitForUser(req, (err, daysLimit) => {
-    if (err) return res.status(500).json({ error: "Database error" });
+  try {
+    const daysLimit = await getDaysLimitForUser(req);
 
-    let dateFilterSql = "";
     const params = [companyId];
-
+    let dateFilterSql = "";
     if (daysLimit != null) {
-      dateFilterSql = ` AND we.work_date >= date('now', ?) `;
-      params.push(`-${daysLimit} days`);
+      params.push(daysLimit);
+      // work_date is DATE in Postgres
+      dateFilterSql = ` AND we.work_date >= (CURRENT_DATE - ($2 * INTERVAL '1 day')) `;
     }
 
-    db.all(
+    const r = await db.query(
       `
       SELECT
         we.id AS work_entry_id,
@@ -138,7 +91,7 @@ router.get("/", (req, res) => {
         we.work_date,
         we.job_no1,
         we.job_no2,
-        we.fees_collected,   -- ✅ header only
+        we.fees_collected,   -- header only
         we.is_bank,
         we.note,
         we.created_at,
@@ -158,56 +111,56 @@ router.get("/", (req, res) => {
         ON wej.work_entry_id = we.id
       LEFT JOIN jobs j
         ON j.id = wej.job_id
-      WHERE we.company_id = ?
+      WHERE we.company_id = $1
       ${dateFilterSql}
       ORDER BY we.work_date DESC, we.id DESC, wej.id ASC
       `,
-      params,
-      (qErr, rows) => {
-        if (qErr) {
-          console.error("GET /api/work-entries error:", qErr.message);
-          return res.status(500).json({ error: "Database error" });
-        }
-
-        const map = new Map();
-
-        for (const r of rows || []) {
-          if (!map.has(r.work_entry_id)) {
-            map.set(r.work_entry_id, {
-              id: r.work_entry_id,
-              company_id: r.company_id,
-              worker_id: r.worker_id,
-              worker_code: r.worker_code,
-              worker_name: r.worker_name,
-              work_date: r.work_date,
-              job_no1: r.job_no1,
-              job_no2: r.job_no2,
-              fees_collected: r.fees_collected, // ✅ header only
-              is_bank: r.is_bank,
-              note: r.note,
-              created_at: r.created_at,
-              jobs: [],
-            });
-          }
-
-          if (r.line_id) {
-            map.get(r.work_entry_id).jobs.push({
-              id: r.line_id,
-              job_code: r.job_code,
-              job_type: r.job_type,
-              hours: r.hours,
-              customer_rate: r.customer_rate,
-              customer_total: r.customer_total,
-              wage_rate: r.wage_rate,
-              wage_total: r.wage_total,
-            });
-          }
-        }
-
-        res.json(Array.from(map.values()));
-      }
+      params
     );
-  });
+
+    const rows = r.rows || [];
+    const map = new Map();
+
+    for (const row of rows) {
+      const workEntryId = row.work_entry_id;
+
+      if (!map.has(workEntryId)) {
+        map.set(workEntryId, {
+          id: workEntryId,
+          company_id: row.company_id,
+          worker_id: row.worker_id,
+          worker_code: row.worker_code,
+          worker_name: row.worker_name,
+          work_date: row.work_date,
+          job_no1: row.job_no1,
+          job_no2: row.job_no2,
+          fees_collected: row.fees_collected,
+          is_bank: row.is_bank,
+          note: row.note,
+          created_at: row.created_at,
+          jobs: [],
+        });
+      }
+
+      if (row.line_id) {
+        map.get(workEntryId).jobs.push({
+          id: row.line_id,
+          job_code: row.job_code,
+          job_type: row.job_type,
+          hours: row.hours,
+          customer_rate: row.customer_rate,
+          customer_total: row.customer_total,
+          wage_rate: row.wage_rate,
+          wage_total: row.wage_total,
+        });
+      }
+    }
+
+    return res.json(Array.from(map.values()));
+  } catch (err) {
+    console.error("GET /api/work-entries error:", err);
+    return res.status(500).json({ error: "Database error" });
+  }
 });
 
 /* =========================
@@ -215,7 +168,7 @@ router.get("/", (req, res) => {
    ONE header + many jobs
    fees_collected stays ONLY on header (no splitting)
    ========================= */
-router.post("/", (req, res) => {
+router.post("/", async (req, res) => {
   const companyId = getCompanyId(req);
   const finalCompanyId = Number(req.body.company_id || companyId || 1);
 
@@ -243,19 +196,18 @@ router.post("/", (req, res) => {
     return res.status(400).json({ error: "fees_collected cannot be negative." });
   }
 
-  enqueueWrite(async () => {
-    try {
-      await exec("BEGIN IMMEDIATE;");
-
+  try {
+    const headerId = await db.tx(async (client) => {
       // 1) insert header (job_no1 unique by company)
-      let headerId;
+      let hid;
       try {
-        const ins = await run(
+        const ins = await client.query(
           `
           INSERT INTO work_entries (
             company_id, worker_id, work_date, job_no1, job_no2,
             fees_collected, is_bank, note
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES ($1, $2, $3::date, $4, $5, $6, $7, $8)
+          RETURNING id
           `,
           [
             finalCompanyId,
@@ -268,12 +220,12 @@ router.post("/", (req, res) => {
             note,
           ]
         );
-        headerId = ins.lastID;
+        hid = ins.rows[0].id;
       } catch (e) {
-        const msg = String(e.message || "");
-        if (msg.includes("UNIQUE constraint failed: work_entries.company_id, work_entries.job_no1")) {
-          await exec("ROLLBACK;");
-          return res.status(400).json({ error: "Job No1 already exists for this company." });
+        // unique_violation
+        if (e?.code === "23505") {
+          // could be job_no1 unique, or something else; message kept generic
+          throw Object.assign(new Error("DUP_JOBNO1"), { _kind: "user" });
         }
         throw e;
       }
@@ -291,32 +243,31 @@ router.post("/", (req, res) => {
         const pay = toNum(line?.pay);
 
         if (!job_code || !hours || hours <= 0) {
-          await exec("ROLLBACK;");
-          return res.status(400).json({ error: "Each job line needs job_code + hours > 0." });
+          throw Object.assign(new Error("INVALID_LINE"), { _kind: "user" });
         }
 
-        const jobRow = await get(
-          `SELECT id FROM jobs WHERE company_id = ? AND job_code = ?`,
+        const jobRow = await client.query(
+          `SELECT id FROM jobs WHERE company_id = $1 AND job_code = $2`,
           [finalCompanyId, job_code]
         );
-        if (!jobRow) {
-          await exec("ROLLBACK;");
-          return res.status(400).json({ error: `Invalid job_code: ${job_code}` });
+
+        if (jobRow.rowCount === 0) {
+          throw Object.assign(new Error(`INVALID_JOB:${job_code}`), { _kind: "user" });
         }
 
         try {
-          await run(
+          await client.query(
             `
             INSERT INTO work_entry_jobs (
               work_entry_id, job_id, hours,
               customer_rate, customer_total,
               wage_tier_id, wage_rate, wage_total,
               rate, pay
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
             `,
             [
-              headerId,
-              jobRow.id,
+              hid,
+              jobRow.rows[0].id,
               hours,
               customer_rate,
               customer_total,
@@ -328,232 +279,44 @@ router.post("/", (req, res) => {
             ]
           );
         } catch (e) {
-          const msg = String(e.message || "");
-          // UNIQUE(work_entry_id, job_id) => no duplicate same job in one entry
-          if (msg.includes("UNIQUE constraint failed: work_entry_jobs.work_entry_id, work_entry_jobs.job_id")) {
-            await exec("ROLLBACK;");
-            return res.status(400).json({
-              error: `Duplicate job in the same entry: ${job_code}`,
-            });
+          if (e?.code === "23505") {
+            // uq_work_entry_jobs_entry_job
+            throw Object.assign(new Error(`DUP_JOB_IN_ENTRY:${job_code}`), { _kind: "user" });
           }
           throw e;
         }
       }
 
-      await exec("COMMIT;");
-      return res.status(201).json({ ok: true, id: headerId });
-    } catch (e) {
-      console.error("POST /api/work-entries error:", e);
-      try {
-        await exec("ROLLBACK;");
-      } catch {}
-      return res.status(500).json({ error: "Database error" });
+      return hid;
+    });
+
+    return res.status(201).json({ ok: true, id: headerId });
+  } catch (e) {
+    if (e?._kind === "user") {
+      const msg = String(e.message || "");
+      if (msg === "DUP_JOBNO1") {
+        return res.status(400).json({ error: "Job No1 already exists for this company." });
+      }
+      if (msg.startsWith("INVALID_JOB:")) {
+        return res.status(400).json({ error: `Invalid job_code: ${msg.split(":")[1]}` });
+      }
+      if (msg === "INVALID_LINE") {
+        return res.status(400).json({ error: "Each job line needs job_code + hours > 0." });
+      }
+      if (msg.startsWith("DUP_JOB_IN_ENTRY:")) {
+        return res.status(400).json({
+          error: `Duplicate job in the same entry: ${msg.split(":")[1]}`,
+        });
+      }
     }
-  });
-});
 
-/* =========================
-   PUT /api/work-entries/:id
-   Update ONE job line
-   (id = work_entry_jobs.id)
-   ========================= */
-router.put("/:id", requirePermission("WORK_ENTRY_EDIT"), (req, res) => {
-  const companyId = getCompanyId(req);
-  const lineId = Number(req.params.id);
-
-  const {
-    worker_id,
-    job_code,
-    amount,           // frontend uses "amount"
-    customer_rate,
-    customer_total,
-    wage_tier_id,
-    wage_rate,
-    wage_total,
-    job_no1,
-    job_no2,
-    work_date,
-    note,
-    is_bank,
-  } = req.body;
-
-  if (!lineId) {
-    return res.status(400).json({ error: "Invalid line id." });
+    console.error("POST /api/work-entries error:", e);
+    return res.status(500).json({ error: "Database error" });
   }
-
-  enqueueWrite(async () => {
-    try {
-      await exec("BEGIN IMMEDIATE;");
-
-      // 1️⃣ Find line + header
-      const row = await get(
-        `
-        SELECT
-          wej.id AS line_id,
-          wej.work_entry_id,
-          we.company_id
-        FROM work_entry_jobs wej
-        JOIN work_entries we ON we.id = wej.work_entry_id
-        WHERE wej.id = ? AND we.company_id = ?
-        `,
-        [lineId, companyId]
-      );
-
-      if (!row) {
-        await exec("ROLLBACK;");
-        return res.status(404).json({ error: "Record not found." });
-      }
-
-      // 2️⃣ Resolve job_id from job_code
-      const jobRow = await get(
-        `SELECT id FROM jobs WHERE company_id = ? AND job_code = ?`,
-        [companyId, job_code]
-      );
-
-      if (!jobRow) {
-        await exec("ROLLBACK;");
-        return res.status(400).json({ error: "Invalid job_code." });
-      }
-
-      const hours = Number(amount);
-      if (!Number.isFinite(hours) || hours <= 0) {
-        await exec("ROLLBACK;");
-        return res.status(400).json({ error: "Invalid hours." });
-      }
-
-      // 3️⃣ Update LINE
-      await run(
-        `
-        UPDATE work_entry_jobs
-        SET
-          job_id = ?,
-          hours = ?,
-          customer_rate = ?,
-          customer_total = ?,
-          wage_tier_id = ?,
-          wage_rate = ?,
-          wage_total = ?,
-          rate = ?,
-          pay = ?
-        WHERE id = ?
-        `,
-        [
-          jobRow.id,
-          hours,
-          customer_rate ?? 0,
-          customer_total ?? 0,
-          wage_tier_id ?? null,
-          wage_rate ?? 0,
-          wage_total ?? 0,
-          wage_rate ?? 0,
-          wage_total ?? 0,
-          lineId,
-        ]
-      );
-
-      // 4️⃣ Update HEADER (shared fields)
-      await run(
-        `
-        UPDATE work_entries
-        SET
-          worker_id = ?,
-          work_date = ?,
-          job_no1 = ?,
-          job_no2 = ?,
-          note = ?,
-          is_bank = ?
-        WHERE id = ?
-        `,
-        [
-          worker_id,
-          work_date,
-          job_no1,
-          job_no2 || null,
-          note || null,
-          Number(is_bank) === 1 ? 1 : 0,
-          row.work_entry_id,
-        ]
-      );
-
-      await exec("COMMIT;");
-      return res.json({ ok: true });
-    } catch (e) {
-      console.error("PUT /api/work-entries/:id error:", e);
-      try {
-        await exec("ROLLBACK;");
-      } catch {}
-      return res.status(500).json({ error: "Database error" });
-    }
-  });
-});
-
-/* =========================
-   DELETE a line
-   DELETE /api/work-entries/:id
-   (id = work_entry_jobs.id)
-   ✅ IMPORTANT: DO NOT touch fees_collected on header
-   ========================= */
-router.delete("/:id", requirePermission("WORK_ENTRY_DELETE"), (req, res) => {
-  const companyId = getCompanyId(req);
-  const lineId = Number(req.params.id);
-
-  if (!lineId) return res.status(400).json({ error: "Invalid id." });
-
-  enqueueWrite(async () => {
-    try {
-      await exec("BEGIN IMMEDIATE;");
-
-      // find line + header
-      const row = await get(
-        `
-        SELECT
-          wej.id,
-          wej.work_entry_id,
-          we.company_id
-        FROM work_entry_jobs wej
-        JOIN work_entries we ON we.id = wej.work_entry_id
-        WHERE wej.id = ? AND we.company_id = ?
-        LIMIT 1
-        `,
-        [lineId, companyId]
-      );
-
-      if (!row) {
-        await exec("ROLLBACK;");
-        return res.status(404).json({ error: "Not found" });
-      }
-
-      // delete the line
-      await run(`DELETE FROM work_entry_jobs WHERE id = ?`, [lineId]);
-
-      // if no more lines, delete header (still keeps job_no1 uniqueness behavior)
-      const left = await get(
-        `SELECT COUNT(*) AS cnt FROM work_entry_jobs WHERE work_entry_id = ?`,
-        [row.work_entry_id]
-      );
-
-      if (Number(left?.cnt || 0) === 0) {
-        await run(`DELETE FROM work_entries WHERE id = ? AND company_id = ?`, [
-          row.work_entry_id,
-          companyId,
-        ]);
-      }
-
-      await exec("COMMIT;");
-      return res.json({ ok: true });
-    } catch (e) {
-      console.error("DELETE /api/work-entries/:id error:", e);
-      try {
-        await exec("ROLLBACK;");
-      } catch {}
-      return res.status(500).json({ error: "Database error" });
-    }
-  });
 });
 
 /* =========================
    Month-to-date customer total
-   (sum of line customer_total)
    GET /api/work-entries/worker-month-customer-total?companyId=1&workerId=2&month=YYYY-MM
    ========================= */
 router.get("/worker-month-customer-total", async (req, res) => {
@@ -573,24 +336,241 @@ router.get("/worker-month-customer-total", async (req, res) => {
   const endStr = end.toISOString().slice(0, 10);
 
   try {
-    const row = await get(
+    const r = await db.query(
       `
       SELECT COALESCE(SUM(wej.customer_total), 0) AS total
       FROM work_entries we
       JOIN work_entry_jobs wej ON wej.work_entry_id = we.id
-      WHERE we.company_id = ?
-        AND we.worker_id = ?
-        AND we.work_date >= ?
-        AND we.work_date < ?
+      WHERE we.company_id = $1
+        AND we.worker_id = $2
+        AND we.work_date >= $3::date
+        AND we.work_date < $4::date
       `,
       [companyId, workerId, start, endStr]
     );
 
-    res.json({ total: Number(row?.total || 0) });
+    return res.json({ total: Number(r.rows?.[0]?.total || 0) });
   } catch (e) {
     console.error("GET worker-month-customer-total error:", e);
-    res.status(500).json({ error: "Database error" });
+    return res.status(500).json({ error: "Database error" });
   }
 });
+
+/* =========================
+   PUT /api/work-entries/:id
+   Update ONE job line
+   (id = work_entry_jobs.id)
+   ========================= */
+router.put("/:id", requirePermission("WORK_ENTRY_EDIT"), async (req, res) => {
+  const companyId = getCompanyId(req);
+  const lineId = Number(req.params.id);
+
+  const {
+    worker_id,
+    job_code,
+    amount, // frontend uses "amount"
+    customer_rate,
+    customer_total,
+    wage_tier_id,
+    wage_rate,
+    wage_total,
+    job_no1,
+    job_no2,
+    work_date,
+    note,
+    is_bank,
+  } = req.body;
+
+  if (!lineId) return res.status(400).json({ error: "Invalid line id." });
+
+  try {
+    await db.tx(async (client) => {
+      // 1) Find line + header
+      const found = await client.query(
+        `
+        SELECT
+          wej.id AS line_id,
+          wej.work_entry_id,
+          we.company_id
+        FROM work_entry_jobs wej
+        JOIN work_entries we ON we.id = wej.work_entry_id
+        WHERE wej.id = $1 AND we.company_id = $2
+        `,
+        [lineId, companyId]
+      );
+
+      if (found.rowCount === 0) {
+        throw Object.assign(new Error("NOT_FOUND"), { _kind: "user" });
+      }
+
+      const workEntryId = found.rows[0].work_entry_id;
+
+      // 2) Resolve job_id from job_code
+      const jobRow = await client.query(
+        `SELECT id FROM jobs WHERE company_id = $1 AND job_code = $2`,
+        [companyId, job_code]
+      );
+
+      if (jobRow.rowCount === 0) {
+        throw Object.assign(new Error("BAD_JOB_CODE"), { _kind: "user" });
+      }
+
+      const hours = Number(amount);
+      if (!Number.isFinite(hours) || hours <= 0) {
+        throw Object.assign(new Error("BAD_HOURS"), { _kind: "user" });
+      }
+
+      // 3) Update LINE
+      try {
+        await client.query(
+          `
+          UPDATE work_entry_jobs
+          SET
+            job_id = $1,
+            hours = $2,
+            customer_rate = $3,
+            customer_total = $4,
+            wage_tier_id = $5,
+            wage_rate = $6,
+            wage_total = $7,
+            rate = $8,
+            pay = $9
+          WHERE id = $10
+          `,
+          [
+            jobRow.rows[0].id,
+            hours,
+            customer_rate ?? 0,
+            customer_total ?? 0,
+            wage_tier_id ?? null,
+            wage_rate ?? 0,
+            wage_total ?? 0,
+            wage_rate ?? 0,
+            wage_total ?? 0,
+            lineId,
+          ]
+        );
+      } catch (e) {
+        if (e?.code === "23505") {
+          // uq_work_entry_jobs_entry_job might be hit if job changed to existing job in same entry
+          throw Object.assign(new Error("DUP_JOB_IN_ENTRY"), { _kind: "user" });
+        }
+        throw e;
+      }
+
+      // 4) Update HEADER (shared fields)
+      // also guard the job_no1 unique (company_id, job_no1)
+      try {
+        await client.query(
+          `
+          UPDATE work_entries
+          SET
+            worker_id = $1,
+            work_date = $2::date,
+            job_no1 = $3,
+            job_no2 = $4,
+            note = $5,
+            is_bank = $6
+          WHERE id = $7
+          `,
+          [
+            worker_id,
+            work_date,
+            job_no1,
+            job_no2 || null,
+            note || null,
+            Number(is_bank) === 1 ? 1 : 0,
+            workEntryId,
+          ]
+        );
+      } catch (e) {
+        if (e?.code === "23505") {
+          throw Object.assign(new Error("DUP_JOBNO1"), { _kind: "user" });
+        }
+        throw e;
+      }
+    });
+
+    return res.json({ ok: true });
+  } catch (e) {
+    if (e?._kind === "user") {
+      if (e.message === "NOT_FOUND") return res.status(404).json({ error: "Record not found." });
+      if (e.message === "BAD_JOB_CODE") return res.status(400).json({ error: "Invalid job_code." });
+      if (e.message === "BAD_HOURS") return res.status(400).json({ error: "Invalid hours." });
+      if (e.message === "DUP_JOB_IN_ENTRY") {
+        return res.status(400).json({ error: "Duplicate job in the same entry." });
+      }
+      if (e.message === "DUP_JOBNO1") {
+        return res.status(400).json({ error: "Job No1 already exists for this company." });
+      }
+    }
+
+    console.error("PUT /api/work-entries/:id error:", e);
+    return res.status(500).json({ error: "Database error" });
+  }
+});
+
+/* =========================
+   DELETE a line
+   DELETE /api/work-entries/:id
+   (id = work_entry_jobs.id)
+   ========================= */
+router.delete("/:id", requirePermission("WORK_ENTRY_DELETE"), async (req, res) => {
+  const companyId = getCompanyId(req);
+  const lineId = Number(req.params.id);
+
+  if (!lineId) return res.status(400).json({ error: "Invalid id." });
+
+  try {
+    await db.tx(async (client) => {
+      const row = await client.query(
+        `
+        SELECT
+          wej.id,
+          wej.work_entry_id,
+          we.company_id
+        FROM work_entry_jobs wej
+        JOIN work_entries we ON we.id = wej.work_entry_id
+        WHERE wej.id = $1 AND we.company_id = $2
+        LIMIT 1
+        `,
+        [lineId, companyId]
+      );
+
+      if (row.rowCount === 0) {
+        throw Object.assign(new Error("NOT_FOUND"), { _kind: "user" });
+      }
+
+      const workEntryId = row.rows[0].work_entry_id;
+
+      // delete the line
+      await client.query(`DELETE FROM work_entry_jobs WHERE id = $1`, [lineId]);
+
+      // if no more lines, delete header
+      const left = await client.query(
+        `SELECT COUNT(*)::int AS cnt FROM work_entry_jobs WHERE work_entry_id = $1`,
+        [workEntryId]
+      );
+
+      if (Number(left.rows[0]?.cnt || 0) === 0) {
+        await client.query(`DELETE FROM work_entries WHERE id = $1 AND company_id = $2`, [
+          workEntryId,
+          companyId,
+        ]);
+      }
+    });
+
+    return res.json({ ok: true });
+  } catch (e) {
+    if (e?._kind === "user" && e.message === "NOT_FOUND") {
+      return res.status(404).json({ error: "Not found" });
+    }
+
+    console.error("DELETE /api/work-entries/:id error:", e);
+    return res.status(500).json({ error: "Database error" });
+  }
+});
+
+
 
 export default router;

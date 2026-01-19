@@ -1,9 +1,10 @@
-// src/db/seed.js
+// src/db/seed.js (PostgreSQL)
+import "dotenv/config";
 import db from "../config/db.js";
 import bcrypt from "bcrypt";
 
 /**
- * Run: node src/db/seed.js
+ * Run: node src/config/seed.js
  *
  * Seeds:
  * - companies (default)
@@ -15,42 +16,22 @@ import bcrypt from "bcrypt";
  * - users (admin + manager/staff) + user_roles + users.role_id sync
  */
 
-function run(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.run(sql, params, function (err) {
-      if (err) return reject(err);
-      resolve(this);
-    });
-  });
-}
-
-function get(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.get(sql, params, (err, row) => {
-      if (err) return reject(err);
-      resolve(row);
-    });
-  });
-}
-
-/* -----------------------------
-   Company
------------------------------- */
 async function ensureDefaultCompany() {
-  const row = await get(`SELECT id FROM companies ORDER BY id LIMIT 1`);
-  if (row?.id) return row.id;
+  const existing = await db.query(`SELECT id FROM companies ORDER BY id LIMIT 1`);
+  if (existing.rows[0]?.id) return existing.rows[0].id;
 
-  const r = await run(
-    `INSERT INTO companies (name, short_code, address, phone)
-     VALUES (?, ?, ?, ?)`,
+  const ins = await db.query(
+    `
+    INSERT INTO companies (name, short_code, address, phone)
+    VALUES ($1, $2, $3, $4)
+    RETURNING id
+    `,
     ["Default Company", "DEFAULT", "", ""]
   );
-  return r.lastID;
+
+  return ins.rows[0].id;
 }
 
-/* -----------------------------
-   Wage tiers
------------------------------- */
 async function ensureWageTiers(companyId) {
   const tiers = [
     ["T1", "Tier 1", 10],
@@ -59,17 +40,17 @@ async function ensureWageTiers(companyId) {
   ];
 
   for (const [tier_code, tier_name, sort_order] of tiers) {
-    await run(
-      `INSERT OR IGNORE INTO wage_tiers (company_id, tier_code, tier_name, sort_order, is_active)
-       VALUES (?, ?, ?, ?, 1)`,
+    await db.query(
+      `
+      INSERT INTO wage_tiers (company_id, tier_code, tier_name, sort_order, is_active)
+      VALUES ($1, $2, $3, $4, 1)
+      ON CONFLICT (company_id, tier_code) DO NOTHING
+      `,
       [companyId, tier_code, tier_name, sort_order]
     );
   }
 }
 
-/* -----------------------------
-   Rules
------------------------------- */
 async function seedRules() {
   const rules = [
     [
@@ -90,33 +71,34 @@ async function seedRules() {
       "When a work entry has multiple jobs, only the lowest wage job uses wage tier. All other jobs use 50% of customer_rate.",
       0,
     ],
-
   ];
 
   for (const [code, name, description, is_default] of rules) {
-    await run(
-      `INSERT OR IGNORE INTO rules (code, name, description, is_default)
-       VALUES (?, ?, ?, ?)`,
+    await db.query(
+      `
+      INSERT INTO rules (code, name, description, is_default)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (code) DO NOTHING
+      `,
       [code, name, description, is_default]
     );
   }
 }
 
 async function ensureCompanyRules(companyId) {
-  await run(
+  // enable default rules for the company
+  await db.query(
     `
-    INSERT OR IGNORE INTO company_rules (company_id, rule_code, enabled)
-    SELECT ?, r.code, 1
+    INSERT INTO company_rules (company_id, rule_code, enabled)
+    SELECT $1, r.code, 1
     FROM rules r
     WHERE COALESCE(r.is_default, 0) = 1
+    ON CONFLICT (company_id, rule_code) DO NOTHING
     `,
     [companyId]
   );
 }
 
-/* -----------------------------
-   Permissions
------------------------------- */
 async function seedPermissions() {
   const permissions = [
     ["PAGE_DASHBOARD", "Can access Dashboard page"],
@@ -159,17 +141,17 @@ async function seedPermissions() {
   ];
 
   for (const [code, description] of permissions) {
-    await run(
-      `INSERT OR IGNORE INTO permissions (code, description)
-       VALUES (?, ?)`,
+    await db.query(
+      `
+      INSERT INTO permissions (code, description)
+      VALUES ($1, $2)
+      ON CONFLICT (code) DO NOTHING
+      `,
       [code, description]
     );
   }
 }
 
-/* -----------------------------
-   Roles
------------------------------- */
 async function seedRoles() {
   const roles = [
     [null, "super_admin", "Super Admin", "System owner: full access across companies", null],
@@ -178,22 +160,28 @@ async function seedRoles() {
   ];
 
   for (const [company_id, code, name, description, daysLimit] of roles) {
-    await run(
-      `INSERT OR IGNORE INTO roles (company_id, code, name, description, work_entries_days_limit)
-       VALUES (?, ?, ?, ?, ?)`,
+    await db.query(
+      `
+      INSERT INTO roles (company_id, code, name, description, work_entries_days_limit)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (company_id, code) DO NOTHING
+      `,
       [company_id, code, name, description, daysLimit]
     );
   }
 }
 
 async function roleIdByCode(code) {
-  const row = await get(`SELECT id FROM roles WHERE company_id IS NULL AND code = ?`, [code]);
-  return row?.id || null;
+  const r = await db.query(
+    `SELECT id FROM roles WHERE company_id IS NULL AND code = $1 LIMIT 1`,
+    [code]
+  );
+  return r.rows[0]?.id || null;
 }
 
 async function permissionIdByCode(code) {
-  const row = await get(`SELECT id FROM permissions WHERE code = ?`, [code]);
-  return row?.id || null;
+  const r = await db.query(`SELECT id FROM permissions WHERE code = $1 LIMIT 1`, [code]);
+  return r.rows[0]?.id || null;
 }
 
 async function grant(roleCode, permissionCodes) {
@@ -204,9 +192,12 @@ async function grant(roleCode, permissionCodes) {
     const permId = await permissionIdByCode(pCode);
     if (!permId) throw new Error(`Permission not found: ${pCode}`);
 
-    await run(
-      `INSERT OR IGNORE INTO role_permissions (role_id, permission_id)
-       VALUES (?, ?)`,
+    await db.query(
+      `
+      INSERT INTO role_permissions (role_id, permission_id)
+      VALUES ($1, $2)
+      ON CONFLICT (role_id, permission_id) DO NOTHING
+      `,
       [roleId, permId]
     );
   }
@@ -215,11 +206,12 @@ async function grant(roleCode, permissionCodes) {
 async function seedRolePermissions() {
   const superRoleId = await roleIdByCode("super_admin");
   if (superRoleId) {
-    await run(
+    await db.query(
       `
-      INSERT OR IGNORE INTO role_permissions (role_id, permission_id)
-      SELECT ?, p.id
+      INSERT INTO role_permissions (role_id, permission_id)
+      SELECT $1, p.id
       FROM permissions p
+      ON CONFLICT (role_id, permission_id) DO NOTHING
       `,
       [superRoleId]
     );
@@ -264,10 +256,6 @@ async function seedRolePermissions() {
   ]);
 }
 
-/* -----------------------------
-   Users + role assignment
-   IMPORTANT: permission.js uses users.role_id
------------------------------- */
 async function ensureUser({
   companyId = null,
   username,
@@ -277,37 +265,43 @@ async function ensureUser({
   is_active = 1,
   roleCode = null,
 }) {
-  const existing = await get(`SELECT id FROM users WHERE username = ?`, [username]);
   const roleId = roleCode ? await roleIdByCode(roleCode) : null;
 
-  if (existing?.id) {
-    // keep role_id synced
-    if (roleId) await run(`UPDATE users SET role_id = ? WHERE id = ?`, [roleId, existing.id]);
-    // keep company_id synced if you changed it
-    await run(`UPDATE users SET company_id = ? WHERE id = ?`, [companyId, existing.id]);
-    return existing.id;
-  }
-
-  const r = await run(
-    `INSERT INTO users (company_id, username, email, password_hash, is_active, is_admin, role_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  // upsert by username
+  const up = await db.query(
+    `
+    INSERT INTO users (company_id, username, email, password_hash, is_active, is_admin, role_id)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
+    ON CONFLICT (username)
+    DO UPDATE SET
+      company_id = EXCLUDED.company_id,
+      email = EXCLUDED.email,
+      password_hash = EXCLUDED.password_hash,
+      is_active = EXCLUDED.is_active,
+      is_admin = EXCLUDED.is_admin,
+      role_id = EXCLUDED.role_id
+    RETURNING id
+    `,
     [companyId, username, email, password_hash, is_active, is_admin, roleId]
   );
 
-  return r.lastID;
+  return up.rows[0].id;
 }
 
 async function assignRoleToUser(userId, roleCode) {
   const roleId = await roleIdByCode(roleCode);
   if (!roleId) throw new Error(`Role not found: ${roleCode}`);
 
-  // legacy sync for permission.js
-  await run(`UPDATE users SET role_id = ? WHERE id = ?`, [roleId, userId]);
+  // sync for permission.js (uses users.role_id)
+  await db.query(`UPDATE users SET role_id = $1 WHERE id = $2`, [roleId, userId]);
 
-  // mapping table for future RBAC upgrade
-  await run(
-    `INSERT OR IGNORE INTO user_roles (user_id, role_id)
-     VALUES (?, ?)`,
+  // mapping table
+  await db.query(
+    `
+    INSERT INTO user_roles (user_id, role_id)
+    VALUES ($1, $2)
+    ON CONFLICT (user_id, role_id) DO NOTHING
+    `,
     [userId, roleId]
   );
 }
@@ -348,9 +342,6 @@ async function seedDefaultUsers(defaultCompanyId) {
   await assignRoleToUser(staffId, "staff");
 }
 
-/* -----------------------------
-   Main
------------------------------- */
 async function main() {
   try {
     const companyId = await ensureDefaultCompany();
@@ -371,7 +362,8 @@ async function main() {
     console.error("❌ Seed failed:", err);
     process.exitCode = 1;
   } finally {
-    db.close();
+    // close postgres pool
+    await db.pool.end();
   }
 }
 

@@ -1,4 +1,18 @@
 services:
+  payroll-app:
+    build: .
+    container_name: payroll-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      # IMPORTANT: store sqlite in mounted folder, not inside container
+      DB_PATH: /app/data/data.sqlite
+      SESSION_SECRET: "change-me-long-random"
+    volumes:
+      - ./data:/app/data
+      
   postgres:
     image: postgres:16
     container_name: workrecords-postgres

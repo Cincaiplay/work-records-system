@@ -192,10 +192,30 @@ function groupJobLabel(line) {
 
 function formatDateDMY(dateStr) {
   if (!dateStr) return "-";
-  const [y, m, d] = String(dateStr).split("-");
-  if (!y || !m || !d) return dateStr;
-  return `${d}/${m}/${y}`;
+
+  const s = String(dateStr).trim();
+
+  // If it's ISO like "2026-01-15T13:00:00.000Z"
+  if (s.includes("T")) {
+    const iso = s.slice(0, 10); // "YYYY-MM-DD"
+    const [y, m, d] = iso.split("-");
+    if (y && m && d) return `${d}/${m}/${y}`;
+    return s;
+  }
+
+  // If it's already "DD/MM/YYYY"
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) return s;
+
+  // If it's "YYYY-MM-DD"
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const [y, m, d] = s.split("-");
+    return `${d}/${m}/${y}`;
+  }
+
+  // Fallback: return as-is
+  return s;
 }
+
 
 // ---------- jobs / tiers ----------
 async function loadJobsForCompany(companyId) {
