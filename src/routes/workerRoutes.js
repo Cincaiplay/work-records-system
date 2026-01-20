@@ -1,4 +1,4 @@
-// src/routes/workerRoutes.js
+// src/routes/workerRoutes.js (PostgreSQL)
 import { Router } from "express";
 import db from "../config/db.js";
 import multer from "multer";
@@ -63,27 +63,29 @@ function parseActive(raw) {
    GET /api/workers?companyId=1
 ===================================================== */
 
-router.get("/", (req, res) => {
+router.get("/", async (req, res) => {
   const companyId = getCompanyId(req);
 
-  db.all(
-    `SELECT w.*,
-            wt.tier_name AS wage_tier_name
-       FROM workers w
-       LEFT JOIN wage_tiers wt
-         ON wt.id = w.wage_tier_id
-        AND wt.company_id = w.company_id
-      WHERE w.company_id = ?
-      ORDER BY w.worker_code ASC`,
-    [companyId],
-    (err, rows) => {
-      if (err) {
-        console.error("GET /api/workers error:", err.message);
-        return res.status(500).json({ error: "Database error" });
-      }
-      res.json(rows || []);
-    }
-  );
+  try {
+    const r = await db.query(
+      `
+      SELECT w.*,
+             wt.tier_name AS wage_tier_name
+        FROM workers w
+        LEFT JOIN wage_tiers wt
+          ON wt.id = w.wage_tier_id
+         AND wt.company_id = w.company_id
+       WHERE w.company_id = $1
+       ORDER BY w.worker_code ASC
+      `,
+      [companyId]
+    );
+
+    return res.json(r.rows || []);
+  } catch (err) {
+    console.error("GET /api/workers error:", err);
+    return res.status(500).json({ error: "Database error" });
+  }
 });
 
 /* =====================================================
@@ -91,7 +93,7 @@ router.get("/", (req, res) => {
    POST /api/workers
 ===================================================== */
 
-router.post("/", (req, res) => {
+router.post("/", async (req, res) => {
   const companyId = getCompanyId(req);
 
   const {
@@ -114,32 +116,38 @@ router.post("/", (req, res) => {
   const wageTierIdVal =
     wage_tier_id != null && wage_tier_id !== "" ? Number(wage_tier_id) : null;
 
-  db.run(
-    `INSERT INTO workers (
-       company_id, worker_code, worker_name, worker_english_name,
-       passport_no, employment_start, nationality, field1,
-       wage_tier_id, is_active
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      companyId,
-      worker_code,
-      worker_name || null,
-      worker_english_name || null,
-      passport_no || null,
-      employment_start || null,
-      nationality || null,
-      field1 || null,
-      wageTierIdVal,
-      activeVal,
-    ],
-    function (err) {
-      if (err) {
-        console.error("POST /api/workers error:", err.message);
-        return res.status(500).json({ error: "Database error" });
-      }
-      res.status(201).json({ id: this.lastID });
+  try {
+    const ins = await db.query(
+      `
+      INSERT INTO workers (
+        company_id, worker_code, worker_name, worker_english_name,
+        passport_no, employment_start, nationality, field1,
+        wage_tier_id, is_active
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      RETURNING id
+      `,
+      [
+        companyId,
+        worker_code,
+        worker_name || null,
+        worker_english_name || null,
+        passport_no || null,
+        employment_start || null,
+        nationality || null,
+        field1 || null,
+        wageTierIdVal,
+        activeVal,
+      ]
+    );
+
+    return res.status(201).json({ id: ins.rows[0].id });
+  } catch (err) {
+    if (err?.code === "23505") {
+      return res.status(400).json({ error: "worker_code already exists for this company." });
     }
-  );
+    console.error("POST /api/workers error:", err);
+    return res.status(500).json({ error: "Database error" });
+  }
 });
 
 /* =====================================================
@@ -147,8 +155,9 @@ router.post("/", (req, res) => {
    PUT /api/workers/:id?companyId=1
 ===================================================== */
 
-router.put("/:id", (req, res) => {
+router.put("/:id", async (req, res) => {
   const companyId = getCompanyId(req);
+  const workerId = Number(req.params.id);
 
   const {
     worker_code,
@@ -162,51 +171,56 @@ router.put("/:id", (req, res) => {
     is_active,
   } = req.body;
 
-  if (!worker_code) {
-    return res.status(400).json({ error: "worker_code is required." });
-  }
+  if (!workerId) return res.status(400).json({ error: "Invalid worker id." });
+  if (!worker_code) return res.status(400).json({ error: "worker_code is required." });
 
   const activeVal = is_active === 0 || is_active === "0" ? 0 : 1;
   const wageTierIdVal =
     wage_tier_id != null && wage_tier_id !== "" ? Number(wage_tier_id) : null;
 
-  db.run(
-    `UPDATE workers SET
-       worker_code = ?,
-       worker_name = ?,
-       worker_english_name = ?,
-       passport_no = ?,
-       employment_start = ?,
-       nationality = ?,
-       field1 = ?,
-       wage_tier_id = ?,
-       is_active = ?
-     WHERE id = ?
-       AND company_id = ?`,
-    [
-      worker_code,
-      worker_name || null,
-      worker_english_name || null,
-      passport_no || null,
-      employment_start || null,
-      nationality || null,
-      field1 || null,
-      wageTierIdVal,
-      activeVal,
-      req.params.id,
-      companyId,
-    ],
-    function (err) {
-      if (err) {
-        console.error("PUT /api/workers error:", err.message);
-        return res.status(500).json({ error: "Database error" });
-      }
-      if (this.changes === 0) {
-        return res.status(404).json({ error: "Worker not found for this company." });
-      }
-      res.json({ message: "Worker updated", changes: this.changes });
+  try {
+    const r = await db.query(
+      `
+      UPDATE workers
+         SET worker_code = $1,
+             worker_name = $2,
+             worker_english_name = $3,
+             passport_no = $4,
+             employment_start = $5,
+             nationality = $6,
+             field1 = $7,
+             wage_tier_id = $8,
+             is_active = $9
+       WHERE id = $10
+         AND company_id = $11
+      `,
+      [
+        worker_code,
+        worker_name || null,
+        worker_english_name || null,
+        passport_no || null,
+        employment_start || null,
+        nationality || null,
+        field1 || null,
+        wageTierIdVal,
+        activeVal,
+        workerId,
+        companyId,
+      ]
+    );
+
+    if (r.rowCount === 0) {
+      return res.status(404).json({ error: "Worker not found for this company." });
     }
-  );
+
+    return res.json({ message: "Worker updated", changes: r.rowCount });
+  } catch (err) {
+    if (err?.code === "23505") {
+      return res.status(400).json({ error: "worker_code already exists for this company." });
+    }
+    console.error("PUT /api/workers error:", err);
+    return res.status(500).json({ error: "Database error" });
+  }
 });
 
 /* =====================================================
@@ -214,23 +228,31 @@ router.put("/:id", (req, res) => {
    DELETE /api/workers/:id?companyId=1
 ===================================================== */
 
-router.delete("/:id", (req, res) => {
+router.delete("/:id", async (req, res) => {
   const companyId = getCompanyId(req);
+  const workerId = Number(req.params.id);
 
-  db.run(
-    "DELETE FROM workers WHERE id = ? AND company_id = ?",
-    [req.params.id, companyId],
-    function (err) {
-      if (err) {
-        console.error("DELETE /api/workers error:", err.message);
-        return res.status(500).json({ error: "Database error" });
-      }
-      if (this.changes === 0) {
-        return res.status(404).json({ error: "Worker not found for this company." });
-      }
-      res.json({ message: "Worker deleted", changes: this.changes });
+  if (!workerId) return res.status(400).json({ error: "Invalid worker id." });
+
+  try {
+    const r = await db.query(
+      `DELETE FROM workers WHERE id = $1 AND company_id = $2`,
+      [workerId, companyId]
+    );
+
+    if (r.rowCount === 0) {
+      return res.status(404).json({ error: "Worker not found for this company." });
     }
-  );
+
+    return res.json({ message: "Worker deleted", changes: r.rowCount });
+  } catch (err) {
+    // if worker referenced by work_entries
+    if (err?.code === "23503") {
+      return res.status(409).json({ error: "Cannot delete: worker is referenced by work entries." });
+    }
+    console.error("DELETE /api/workers error:", err);
+    return res.status(500).json({ error: "Database error" });
+  }
 });
 
 /* =====================================================
@@ -245,38 +267,27 @@ router.get("/export", async (req, res) => {
       return res.status(400).send("Invalid companyId");
     }
 
-    // 1) Get company name for filename
-    const company = await new Promise((resolve, reject) => {
-      db.get(
-        `SELECT name FROM companies WHERE id = ?`,
-        [companyId],
-        (err, row) => (err ? reject(err) : resolve(row))
-      );
-    });
+    const c = await db.query(`SELECT name FROM companies WHERE id = $1`, [companyId]);
+    const companyName = c.rows[0]?.name || `company_${companyId}`;
 
-    const companyName = company?.name || `company_${companyId}`;
-
-    // sanitize filename: keep letters/numbers/_ and also keep CJK chars
-    // (remove characters that break filenames like / \ : * ? " < > |)
     const safeCompanyName = String(companyName)
       .replace(/[\/\\:*?"<>|]+/g, "_")
       .replace(/\s+/g, "_")
       .replace(/^_+|_+$/g, "");
 
-    // 2) Query workers (include Chinese name field worker_name)
-    const rows = await new Promise((resolve, reject) => {
-      db.all(
-        `SELECT worker_code, worker_name, worker_english_name, passport_no,
-                nationality, employment_start, is_active, wage_tier_id, field1
-           FROM workers
-          WHERE company_id = ?
-          ORDER BY worker_code ASC`,
-        [companyId],
-        (err, r) => (err ? reject(err) : resolve(r || []))
-      );
-    });
+    const r = await db.query(
+      `
+      SELECT worker_code, worker_name, worker_english_name, passport_no,
+             nationality, employment_start, is_active, wage_tier_id, field1
+        FROM workers
+       WHERE company_id = $1
+       ORDER BY worker_code ASC
+      `,
+      [companyId]
+    );
 
-    // 3) Build CSV
+    const rows = r.rows || [];
+
     const header = [
       "worker_code",
       "worker_name",
@@ -290,24 +301,23 @@ router.get("/export", async (req, res) => {
     ].join(",");
 
     const body = rows
-      .map((r) =>
+      .map((x) =>
         [
-          r.worker_code ?? "",
-          r.worker_name ?? "", // ✅ Chinese name lives here
-          r.worker_english_name ?? "",
-          r.passport_no ?? "",
-          r.nationality ?? "",
-          r.employment_start ?? "",
-          r.is_active ?? "",
-          r.wage_tier_id ?? "",
-          r.field1 ?? "",
+          x.worker_code ?? "",
+          x.worker_name ?? "",
+          x.worker_english_name ?? "",
+          x.passport_no ?? "",
+          x.nationality ?? "",
+          x.employment_start ?? "",
+          x.is_active ?? "",
+          x.wage_tier_id ?? "",
+          x.field1 ?? "",
         ]
           .map(csvEscape)
           .join(",")
       )
       .join("\n");
 
-    // ✅ BOM makes Excel recognize UTF-8 (Chinese)
     const csv = "\ufeff" + header + "\n" + body + "\n";
 
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
@@ -315,13 +325,12 @@ router.get("/export", async (req, res) => {
       "Content-Disposition",
       `attachment; filename="${safeCompanyName}_workers.csv"`
     );
-    res.send(csv);
+    return res.send(csv);
   } catch (err) {
     console.error("workers export error:", err);
-    res.status(500).send("Failed to export workers");
+    return res.status(500).send("Failed to export workers");
   }
 });
-
 
 /* =====================================================
    IMPORT workers (Confirm)
@@ -331,12 +340,12 @@ router.get("/export", async (req, res) => {
 router.post("/import", upload.single("file"), async (req, res) => {
   try {
     const companyId = Number(req.body.companyId || req.query.companyId || 1);
+
     if (!companyId || companyId <= 0) return res.status(400).json({ error: "Invalid companyId" });
     if (!req.file?.buffer) return res.status(400).json({ error: "Missing file" });
 
-    const text = req.file.buffer.toString("utf8");
+    const text = req.file.buffer.toString("utf8").replace(/^\uFEFF/, "");
 
-    // ✅ normalize headers so BOM/spaces won't break worker_code
     const recordsRaw = parse(text, {
       columns: (headers) => headers.map(normalizeHeader),
       skip_empty_lines: true,
@@ -349,59 +358,59 @@ router.post("/import", upload.single("file"), async (req, res) => {
     let inserted = 0;
     let updated = 0;
 
-    for (let i = 0; i < records.length; i++) {
-      const r = records[i];
-      const rowNo = i + 2;
+    await db.tx(async (client) => {
+      for (let i = 0; i < records.length; i++) {
+        const r = records[i];
+        const rowNo = i + 2;
 
-      // ✅ keys are normalized to snake_case lower
-      const worker_code = asTrimOrNull(r.worker_code);
-      const worker_name = asTrimOrNull(r.worker_name);
+        const worker_code = asTrimOrNull(r.worker_code);
+        const worker_name = asTrimOrNull(r.worker_name);
 
-      const worker_english_name = asTrimOrNull(r.worker_english_name);
-      const passport_no = asTrimOrNull(r.passport_no);
-      const nationality = asTrimOrNull(r.nationality);
-      const employment_start = asTrimOrNull(r.employment_start);
+        const worker_english_name = asTrimOrNull(r.worker_english_name);
+        const passport_no = asTrimOrNull(r.passport_no);
+        const nationality = asTrimOrNull(r.nationality);
+        const employment_start = asTrimOrNull(r.employment_start);
+        const field1 = asTrimOrNull(r.field1 ?? r.note);
 
-      // accept "note" too (template or user)
-      const field1 = asTrimOrNull(r.field1 ?? r.note);
+        const wage_tier_id =
+          r.wage_tier_id !== undefined && String(r.wage_tier_id).trim() !== ""
+            ? Number(r.wage_tier_id)
+            : null;
 
-      const wage_tier_id =
-        r.wage_tier_id !== undefined && String(r.wage_tier_id).trim() !== ""
-          ? Number(r.wage_tier_id)
-          : null;
+        const is_active = parseActive(r.is_active);
 
-      const is_active = parseActive(r.is_active);
+        if (!worker_code) {
+          errors.push({ row: rowNo, field: "worker_code", error: "Required" });
+          continue;
+        }
+        if (!worker_name) {
+          errors.push({ row: rowNo, field: "worker_name", error: "Required" });
+          continue;
+        }
+        if (is_active === "__INVALID__") {
+          errors.push({ row: rowNo, field: "is_active", error: "Invalid (use 1/0, yes/no)" });
+          continue;
+        }
 
-      // REQUIRED
-      if (!worker_code) {
-        errors.push({ row: rowNo, field: "worker_code", error: "Required" });
-        continue;
-      }
-      if (!worker_name) {
-        errors.push({ row: rowNo, field: "worker_name", error: "Required" });
-        continue;
-      }
-      if (is_active === "__INVALID__") {
-        errors.push({ row: rowNo, field: "is_active", error: "Invalid (use 1/0, yes/no)" });
-        continue;
-      }
-
-      const existing = await new Promise((resolve, reject) => {
-        db.get(
-          `SELECT id FROM workers
-           WHERE company_id = ? AND lower(worker_code) = lower(?)`,
-          [companyId, worker_code],
-          (err, row) => (err ? reject(err) : resolve(row || null))
+        const existing = await client.query(
+          `
+          SELECT id
+            FROM workers
+           WHERE company_id = $1
+             AND lower(worker_code) = lower($2)
+           LIMIT 1
+          `,
+          [companyId, worker_code]
         );
-      });
 
-      if (!existing) {
-        await new Promise((resolve, reject) => {
-          db.run(
-            `INSERT INTO workers
-             (company_id, worker_code, worker_name, worker_english_name, passport_no,
-              employment_start, nationality, field1, is_active, wage_tier_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        if (existing.rowCount === 0) {
+          await client.query(
+            `
+            INSERT INTO workers
+              (company_id, worker_code, worker_name, worker_english_name, passport_no,
+               employment_start, nationality, field1, is_active, wage_tier_id)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+            `,
             [
               companyId,
               worker_code,
@@ -413,50 +422,55 @@ router.post("/import", upload.single("file"), async (req, res) => {
               field1,
               is_active ?? 1,
               wage_tier_id,
-            ],
-            (err) => (err ? reject(err) : resolve())
+            ]
           );
-        });
-        inserted++;
-      } else {
-        const fields = [];
-        const values = [];
+          inserted++;
+        } else {
+          const id = existing.rows[0].id;
 
-        // always update required name
-        fields.push("worker_name = ?");
-        values.push(worker_name);
+          const sets = [];
+          const values = [];
+          let p = 1;
 
-        if (worker_english_name !== null) { fields.push("worker_english_name = ?"); values.push(worker_english_name); }
-        if (passport_no !== null) { fields.push("passport_no = ?"); values.push(passport_no); }
-        if (employment_start !== null) { fields.push("employment_start = ?"); values.push(employment_start); }
-        if (nationality !== null) { fields.push("nationality = ?"); values.push(nationality); }
-        if (field1 !== null) { fields.push("field1 = ?"); values.push(field1); }
-        if (wage_tier_id !== null) { fields.push("wage_tier_id = ?"); values.push(wage_tier_id); }
-        if (is_active !== null) { fields.push("is_active = ?"); values.push(is_active); }
+          sets.push(`worker_name = $${p++}`); values.push(worker_name);
 
-        values.push(existing.id);
+          if (worker_english_name !== null) { sets.push(`worker_english_name = $${p++}`); values.push(worker_english_name); }
+          if (passport_no !== null) { sets.push(`passport_no = $${p++}`); values.push(passport_no); }
+          if (employment_start !== null) { sets.push(`employment_start = $${p++}`); values.push(employment_start); }
+          if (nationality !== null) { sets.push(`nationality = $${p++}`); values.push(nationality); }
+          if (field1 !== null) { sets.push(`field1 = $${p++}`); values.push(field1); }
+          if (wage_tier_id !== null) { sets.push(`wage_tier_id = $${p++}`); values.push(wage_tier_id); }
+          if (is_active !== null) { sets.push(`is_active = $${p++}`); values.push(is_active); }
 
-        await new Promise((resolve, reject) => {
-          db.run(
-            `UPDATE workers SET ${fields.join(", ")} WHERE id = ?`,
-            values,
-            (err) => (err ? reject(err) : resolve())
+          values.push(id);
+
+          await client.query(
+            `UPDATE workers SET ${sets.join(", ")} WHERE id = $${p}`,
+            values
           );
-        });
-        updated++;
+
+          updated++;
+        }
       }
-    }
 
-    if (errors.length) {
-      return res.status(400).json({ error: "Validation failed", errors });
-    }
+      // abort the tx if validation failed
+      if (errors.length) {
+        const e = new Error("VALIDATION_FAILED");
+        e._errors = errors;
+        throw e;
+      }
+    });
 
-    res.json({ ok: true, inserted, updated, total: records.length });
+    return res.json({ ok: true, inserted, updated, total: records.length });
   } catch (err) {
+    if (err?.message === "VALIDATION_FAILED") {
+      return res.status(400).json({ error: "Validation failed", errors: err._errors || [] });
+    }
     console.error("workers import error:", err);
-    res.status(500).json({ error: "Failed to import workers", details: err.message });
+    return res.status(500).json({ error: "Failed to import workers", details: err.message });
   }
 });
+
 
 /* =====================================================
    IMPORT workers (Preview)
@@ -469,16 +483,14 @@ router.post("/import/preview", upload.single("file"), async (req, res) => {
     if (!companyId || companyId <= 0) return res.status(400).json({ error: "Invalid companyId" });
     if (!req.file?.buffer) return res.status(400).json({ error: "Missing file" });
 
-    const text = req.file.buffer.toString("utf8");
+    const text = req.file.buffer.toString("utf8").replace(/^\uFEFF/, "");
 
-    // ✅ normalize headers so BOM/spaces won't break worker_code
     const rawRecords = parse(text, {
       columns: (headers) => headers.map(normalizeHeader),
       skip_empty_lines: true,
       trim: true,
     });
 
-    // keep original CSV row numbers
     const indexed = (rawRecords || []).map((row, idx) => ({ row, idx }));
     const records = indexed.filter((x) => rowHasAnyValue(x.row));
 
@@ -545,16 +557,18 @@ router.post("/import/preview", upload.single("file"), async (req, res) => {
         continue;
       }
 
-      const exists = await new Promise((resolve, reject) => {
-        db.get(
-          `SELECT id FROM workers
-           WHERE company_id = ? AND lower(worker_code)=lower(?)`,
-          [companyId, worker_code],
-          (err, row) => (err ? reject(err) : resolve(!!row))
-        );
-      });
+      const exists = await db.query(
+        `
+        SELECT 1
+          FROM workers
+         WHERE company_id = $1
+           AND lower(worker_code) = lower($2)
+         LIMIT 1
+        `,
+        [companyId, worker_code]
+      );
 
-      const action = exists ? "UPDATE" : "INSERT";
+      const action = exists.rowCount > 0 ? "UPDATE" : "INSERT";
       if (action === "INSERT") willInsert++;
       else willUpdate++;
 
@@ -574,14 +588,14 @@ router.post("/import/preview", upload.single("file"), async (req, res) => {
       });
     }
 
-    res.json({
+    return res.json({
       ok: true,
       totals: { total: records.length, willInsert, willUpdate, errors },
       rows: preview,
     });
   } catch (err) {
     console.error("workers import preview error:", err);
-    res.status(500).json({ error: "Failed to preview import" });
+    return res.status(500).json({ error: "Failed to preview import" });
   }
 });
 
@@ -598,7 +612,6 @@ router.get("/template.csv", (req, res) => {
   const sample2 = "W002,李四,Li Si,E15613,China,,1,,";
   const sample3 = "W003,Alice,Ali,K156123,Indo,,1,,";
 
-  // ✅ BOM so Excel opens UTF-8 correctly
   const csv = "\ufeff" + [header, sample1, sample2, sample3].join("\n") + "\n";
 
   res.setHeader("Content-Type", "text/csv; charset=utf-8");

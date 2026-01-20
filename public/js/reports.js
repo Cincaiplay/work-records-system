@@ -49,7 +49,6 @@ function showOrHidePayFilters(reportKey) {
 }
 
 function getPayTypeQuery() {
-  // If no permission -> don’t send (backend will force BANK_ONLY)
   if (window.CAN_FILTER_PAYTYPE !== true) return "";
 
   const cash = document.getElementById("filterCash")?.checked ? 1 : 0;
@@ -57,15 +56,10 @@ function getPayTypeQuery() {
   return `&cash=${cash}&bank=${bank}`;
 }
 
-// ✅ JobNo filter query:
-// - both checked => &jobno1=1&jobno2=1 (backend returns all)
-// - only jobno2 => &jobno1=0&jobno2=1 (must have job_no2)
-// - only jobno1 => &jobno1=1&jobno2=0 (must have NO job_no2)
+// JobNo filter query
 function getJobNoQuery() {
   const j1El = document.getElementById("filterJobNo1");
   const j2El = document.getElementById("filterJobNo2");
-
-  // If your HTML is not added / ids mismatch, DO NOT break reports
   if (!j1El || !j2El) return "";
 
   const j1 = j1El.checked ? 1 : 0;
@@ -73,25 +67,209 @@ function getJobNoQuery() {
   return `&jobno1=${j1}&jobno2=${j2}`;
 }
 
-// ✅ No auto preview (only normalize to prevent both unchecked)
 function wireJobNoFilterRules() {
   const j1 = document.getElementById("filterJobNo1");
   const j2 = document.getElementById("filterJobNo2");
   if (!j1 || !j2) return;
 
   const normalize = () => {
-    // If none checked, force BOTH (show all)
     if (!j1.checked && !j2.checked) {
       j1.checked = true;
       j2.checked = true;
     }
   };
 
-  // normalize once on load so query is never 0/0
   normalize();
-
   j1.addEventListener("change", normalize);
   j2.addEventListener("change", normalize);
+}
+
+/* =====================================================
+   Worker Picker (multi-select dropdown)
+   - Keeps original <select id="reportWorkerId"> (hidden)
+   - Dropdown reflects select options + selection
+===================================================== */
+
+let _workerPicker = { selected: new Set() };
+
+function escapeHtml(s) {
+  return String(s ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function getSelectedWorkerIds() {
+  const sel = document.getElementById("reportWorkerId");
+  if (!sel) return [];
+  return Array.from(sel.selectedOptions || [])
+    .map((o) => Number(o.value))
+    .filter((n) => Number.isFinite(n) && n > 0);
+}
+
+function syncWorkerPickerToSelect() {
+  const sel = document.getElementById("reportWorkerId");
+  if (!sel) return;
+
+  Array.from(sel.options || []).forEach((o) => {
+    const val = String(o.value || "").trim();
+    o.selected = val ? _workerPicker.selected.has(val) : false;
+  });
+}
+
+function updateWorkerPickerButtonText() {
+  const sel = document.getElementById("reportWorkerId");
+  const btn = document.getElementById("workerPickerBtn");
+  if (!sel || !btn) return;
+
+  const selectedOpts = Array.from(sel.options || []).filter(
+    (o) => o.selected && String(o.value || "").trim()
+  );
+
+  if (selectedOpts.length === 0) return (btn.textContent = "Select worker(s)");
+  if (selectedOpts.length === 1) return (btn.textContent = selectedOpts[0].text.trim() || "1 worker selected");
+  btn.textContent = `${selectedOpts.length} workers selected`;
+}
+
+function renderWorkerPickerList() {
+  const sel = document.getElementById("reportWorkerId");
+  const menu = document.getElementById("workerPickerMenu");
+  const listEl = menu?.querySelector("#workerPickerList");
+  const searchEl = menu?.querySelector("#workerPickerSearch");
+  if (!sel || !listEl) return;
+
+  const q = String(searchEl?.value || "").trim().toLowerCase();
+
+  const opts = Array.from(sel.options || []).filter((o) => {
+    const val = String(o.value || "").trim();
+    if (!val) return false;
+    const label = String(o.text || "").trim();
+    if (!q) return true;
+    return label.toLowerCase().includes(q) || val.toLowerCase().includes(q);
+  });
+
+  if (!opts.length) {
+    listEl.innerHTML = `<div class="text-muted small">No workers found.</div>`;
+    updateWorkerPickerButtonText();
+    return;
+  }
+
+  listEl.innerHTML = opts
+    .map((o) => {
+      const val = String(o.value);
+      const label = String(o.text || "").trim();
+      const checked = _workerPicker.selected.has(val) ? "checked" : "";
+      const id = `wk_${val.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+
+      return `
+        <div class="form-check mb-1">
+          <input class="form-check-input" type="checkbox" id="${id}" data-value="${val}" ${checked}>
+          <label class="form-check-label" for="${id}">${escapeHtml(label)}</label>
+        </div>
+      `;
+    })
+    .join("");
+
+  updateWorkerPickerButtonText();
+}
+
+function initWorkerMultiSelectDropdown() {
+  const sel = document.getElementById("reportWorkerId");
+  if (!sel) return;
+
+  // already initialized
+  if (document.getElementById("workerPickerWrap")) return;
+
+  // hide original select
+  sel.classList.add("d-none");
+
+  const wrap = document.createElement("div");
+  wrap.id = "workerPickerWrap";
+  wrap.className = "dropdown";
+
+  const btn = document.createElement("button");
+  btn.id = "workerPickerBtn";
+  btn.type = "button";
+  btn.className = "btn btn-outline-secondary w-100 text-start dropdown-toggle";
+  btn.setAttribute("data-bs-toggle", "dropdown");
+  btn.setAttribute("aria-expanded", "false");
+  btn.textContent = "Select worker(s)";
+
+  const menu = document.createElement("div");
+  menu.id = "workerPickerMenu";
+  menu.className = "dropdown-menu p-2 shadow";
+  menu.style.width = "100%";
+  menu.style.maxHeight = "320px";
+  menu.style.overflow = "auto";
+
+  menu.innerHTML = `
+    <div class="d-flex gap-2 mb-2">
+      <input id="workerPickerSearch" class="form-control form-control-sm" placeholder="Search worker..." />
+      <button id="workerPickerAll" type="button" class="btn btn-sm btn-light">All</button>
+      <button id="workerPickerNone" type="button" class="btn btn-sm btn-light">Clear</button>
+    </div>
+    <div id="workerPickerList" class="small"></div>
+    <div class="border-top mt-2 pt-2 text-muted small">
+      Tip: you can select multiple workers.
+    </div>
+  `;
+
+  sel.parentElement.insertBefore(wrap, sel.nextSibling);
+  wrap.appendChild(btn);
+  wrap.appendChild(menu);
+
+  // mirror initial selections
+  _workerPicker.selected = new Set(
+    Array.from(sel.options || [])
+      .filter((o) => o.selected && o.value)
+      .map((o) => String(o.value))
+  );
+
+  renderWorkerPickerList();
+
+  const searchEl = menu.querySelector("#workerPickerSearch");
+  const allBtn = menu.querySelector("#workerPickerAll");
+  const noneBtn = menu.querySelector("#workerPickerNone");
+  const listEl = menu.querySelector("#workerPickerList");
+
+  searchEl.addEventListener("input", () => renderWorkerPickerList());
+
+  allBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    Array.from(sel.options || []).forEach((o) => {
+      if (String(o.value || "").trim()) _workerPicker.selected.add(String(o.value));
+    });
+    syncWorkerPickerToSelect();
+    renderWorkerPickerList();
+  });
+
+  noneBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    _workerPicker.selected.clear();
+    syncWorkerPickerToSelect();
+    renderWorkerPickerList();
+  });
+
+  listEl.addEventListener("change", (e) => {
+    const t = e.target;
+    if (!t || t.type !== "checkbox") return;
+
+    const val = String(t.getAttribute("data-value") || "");
+    if (!val) return;
+
+    if (t.checked) _workerPicker.selected.add(val);
+    else _workerPicker.selected.delete(val);
+
+    syncWorkerPickerToSelect();
+    updateWorkerPickerButtonText();
+  });
+
+  // keep dropdown open while clicking inside
+  menu.addEventListener("click", (e) => e.stopPropagation());
+
+  updateWorkerPickerButtonText();
 }
 
 async function loadWorkersIntoSelect() {
@@ -105,24 +283,74 @@ async function loadWorkersIntoSelect() {
   const list = Array.isArray(data) ? data : (data.workers || data.rows || []);
   sel.innerHTML = `<option value="">-- Select Worker --</option>`;
 
-  list.forEach(w => {
+  list.forEach((w) => {
     const id = w.id;
     const code = w.worker_code || "";
     const name = w.worker_name || w.worker_english_name || "";
     const label = `${code} ${name}`.trim() || `Worker ${id}`;
+
     const opt = document.createElement("option");
     opt.value = String(id);
     opt.textContent = label;
     sel.appendChild(opt);
   });
+
+  // if dropdown already exists, refresh it
+  if (document.getElementById("workerPickerWrap")) {
+    // keep previous selection if possible
+    const prev = new Set(_workerPicker.selected);
+    _workerPicker.selected = new Set(
+      Array.from(sel.options || [])
+        .map((o) => String(o.value || "").trim())
+        .filter((v) => v && prev.has(v))
+    );
+    syncWorkerPickerToSelect();
+    renderWorkerPickerList();
+  }
 }
 
 function showOrHideWorkerPicker(reportKey) {
   const box = document.getElementById("workerPickerBox");
   if (!box) return;
+
   const show = reportKey === "worker-payslip";
   box.style.display = show ? "" : "none";
-  if (show) loadWorkersIntoSelect();
+  if (!show) return;
+
+  loadWorkersIntoSelect()
+    .then(() => {
+      initWorkerMultiSelectDropdown(); // create once
+      renderWorkerPickerList();        // refresh list after options updated
+    })
+    .catch((e) => console.error("loadWorkersIntoSelect failed:", e));
+}
+
+function buildWorkerIdsQueryParam(workerIds) {
+  // repeated params: &workerId=1&workerId=2
+  return (workerIds || []).map((id) => `&workerId=${encodeURIComponent(id)}`).join("");
+}
+
+function parseWorkerIdsFromQuery(req) {
+  // supports: &workerId=1&workerId=2 OR &workerIds=1,2
+  const list = [];
+
+  const repeated = req.query.workerId;
+  if (Array.isArray(repeated)) {
+    for (const x of repeated) list.push(Number(x));
+  } else if (repeated != null && repeated !== "") {
+    list.push(Number(repeated));
+  }
+
+  const csv = req.query.workerIds;
+  if (csv) {
+    String(csv)
+      .split(",")
+      .map((s) => Number(String(s).trim()))
+      .forEach((n) => list.push(n));
+  }
+
+  // unique + valid
+  return Array.from(new Set(list)).filter((n) => Number.isFinite(n) && n > 0);
 }
 
 
@@ -342,7 +570,7 @@ function renderWorkerJobListingHtml(data, meta) {
             <tr class="fw-bold">
               <td colspan="3" class="text-end">TOTAL</td>
               <td class="text-end">${fmt(w.total_hours)}</td>
-              <td class="text-end">${fmt(w.total_fee)}</td>
+              <td class="text-end"></td>
               <td class="text-end">${fmt(w.total_wage)}</td>
             </tr>
           </tfoot>
@@ -573,85 +801,112 @@ function exportMonthlySummaryPdf() {
 
 async function previewWorkerPayslip() {
   const companyId = getCompanyIdSafe();
-  const workerId = document.getElementById("reportWorkerId")?.value || "";
+  const workerIds = getSelectedWorkerIds(); // ✅ MULTI
   const startDate = document.getElementById("reportStartDate")?.value || "";
   const endDate = document.getElementById("reportEndDate")?.value || "";
 
-  if (!workerId) return alert("Please select a worker.");
+  if (!workerIds.length) return alert("Please select at least one worker.");
   if (!startDate || !endDate) return alert("Please select start and end date.");
 
   document.getElementById("reportContent").innerHTML =
     `<div class="text-muted small">Loading...</div>`;
 
   const qs = getPayTypeQuery() + getJobNoQuery();
-  const url = `/api/reports/worker-payslip?companyId=${companyId}&workerId=${workerId}&start=${startDate}&end=${endDate}${qs}`;
 
-  const res = await fetch(url);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) return alert(data?.error || "Failed to generate report.");
+  let html = "";
 
-  // Simple HTML preview (PDF is the real output)
-  const rows = data.rows || [];
-  const w = data.worker || {};
-  const t = data.totals || {};
-  const title = data.title || "Worker Payslip";
+  // 🔁 ONE REQUEST PER WORKER
+  for (const workerId of workerIds) {
+    const url =
+      `/api/reports/worker-payslip?companyId=${companyId}` +
+      `&workerId=${workerId}&start=${startDate}&end=${endDate}${qs}`;
 
-  const html = `
-    <div class="mb-2">
-      <div class="fw-bold">${title}</div>
-      <div class="text-muted small">${w.worker_code || ""} ${w.worker_name || ""}</div>
-      <div class="text-muted small">${startDate} to ${endDate}</div>
-    </div>
+    const res = await fetch(url);
+    const data = await res.json().catch(() => ({}));
 
-    <div class="table-responsive">
-      <table class="table table-sm align-middle">
-        <thead class="table-light">
-          <tr>
-            <th>项目</th>
-            <th class="text-end">时钟</th>
-            <th class="text-end">收费</th>
-            <th class="text-end">工资</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rows.map(r => `
-            <tr>
-              <td>${r.job_desc || "-"}</td>
-              <td class="text-end">${fmt(r.hours)}</td>
-              <td class="text-end">${fmt(r.fee)}</td>
-              <td class="text-end">${fmt(r.wage)}</td>
-            </tr>
-          `).join("")}
-        </tbody>
-        <tfoot>
-          <tr class="fw-bold table-warning">
-            <td>TOTAL</td>
-            <td class="text-end">${fmt(t.total_hours)}</td>
-            <td class="text-end"></td>
-            <td class="text-end">${fmt(t.total_wage)}</td>
-          </tr>
-        </tfoot>
-      </table>
-    </div>
+    if (!res.ok) {
+      html += `<div class="text-danger mb-3">
+        Failed to load worker ID ${workerId}
+      </div>`;
+      continue;
+    }
 
-    <div class="text-muted small">For official layout, use PDF export.</div>
-  `;
+    const rows = data.rows || [];
+    const w = data.worker || {};
+    const t = data.totals || {};
+    const title = data.title || "Worker Payslip";
+
+    html += `
+      <div class="border rounded p-3 mb-4 bg-white">
+        <div class="mb-2">
+          <div class="fw-bold">${title}</div>
+          <div class="text-muted small">
+            ${w.worker_code || ""} ${w.worker_name || ""}
+          </div>
+          <div class="text-muted small">
+            ${startDate} to ${endDate}
+          </div>
+        </div>
+
+        <div class="table-responsive">
+          <table class="table table-sm align-middle">
+            <thead class="table-light">
+              <tr>
+                <th>项目</th>
+                <th class="text-end">时钟</th>
+                <th class="text-end">收费</th>
+                <th class="text-end">工资</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map(r => `
+                <tr>
+                  <td>${r.job_desc || "-"}</td>
+                  <td class="text-end">${fmt(r.hours)}</td>
+                  <td class="text-end">${fmt(r.fee)}</td>
+                  <td class="text-end">${fmt(r.wage)}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+            <tfoot>
+              <tr class="fw-bold table-warning">
+                <td>TOTAL</td>
+                <td class="text-end">${fmt(t.total_hours)}</td>
+                <td class="text-end"></td>
+                <td class="text-end">${fmt(t.total_wage)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+    `;
+  }
+
+  html += `<div class="text-muted small">
+    For official layout, use PDF export.
+  </div>`;
 
   document.getElementById("reportContent").innerHTML = html;
 }
 
 function exportWorkerPayslipPdf() {
   const companyId = getCompanyIdSafe();
-  const workerId = document.getElementById("reportWorkerId")?.value || "";
+  const workerIds = getSelectedWorkerIds();
   const startDate = document.getElementById("reportStartDate")?.value || "";
   const endDate = document.getElementById("reportEndDate")?.value || "";
 
-  if (!workerId) return alert("Please select a worker.");
+  if (!workerIds.length) return alert("Please select worker(s).");
   if (!startDate || !endDate) return alert("Please select start and end date.");
 
   const qs = getPayTypeQuery() + getJobNoQuery();
+  const wq = buildWorkerIdsQueryParam(workerIds);
+
   window.open(
-    `/api/reports/worker-payslip/pdf?companyId=${companyId}&workerId=${workerId}&start=${startDate}&end=${endDate}${qs}`,
+    `/api/reports/worker-payslip/pdf?companyId=${encodeURIComponent(companyId)}` +
+      `${wq}` +
+      `&start=${encodeURIComponent(startDate)}` +
+      `&end=${encodeURIComponent(endDate)}` +
+      `${qs}`,
     "_blank"
   );
 }
