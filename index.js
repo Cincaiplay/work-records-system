@@ -1,11 +1,12 @@
+import "dotenv/config"; 
 import express from "express";
-import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
 import session from "express-session";
-import { requirePermission, hasPermission } from "./src/middleware/permission.js";
+import pgSession from "connect-pg-simple";
+import db from "./src/config/db.js";
 
-import "./src/config/db.js";
+import { requirePermission, hasPermission } from "./src/middleware/permission.js";
 import userRoutes from "./src/routes/userRoutes.js";
 import jobRoutes from "./src/routes/jobRoutes.js";
 import workerRoutes from "./src/routes/workerRoutes.js";
@@ -19,70 +20,88 @@ import { requireAuth } from "./src/middleware/auth.js";
 import managementRoutes from "./src/routes/managementRoutes.js";
 import companyContextRoutes from "./src/routes/companyContextRoutes.js";
 
-dotenv.config();
-
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const PgSession = pgSession(session);
+
+// --- fail fast on missing env ---
+if (!process.env.SESSION_SECRET) {
+  console.error("❌ SESSION_SECRET is not set. Refusing to start.");
+  process.exit(1);
+}
+if (!process.env.DATABASE_URL) {
+  console.error("❌ DATABASE_URL is not set. Refusing to start.");
+  process.exit(1);
+}
+
+// --- basic middleware ---
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
+// Behind nginx / load balancer (HTTPS termination)
+app.set("trust proxy", 1);
 
-// ✅ session FIRST
+// --- sessions (ONE time only) ---
 app.use(
   session({
-    secret: process.env.SESSION_SECRET || "dev-secret-change-me",
+    store: new PgSession({
+      pool: db.pool,
+      tableName: "session",
+      createTableIfMissing: true,
+    }),
+    secret: process.env.SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
-    cookie: { httpOnly: true, sameSite: "lax", maxAge: 1000 * 60 * 60 * 8 },
+    cookie: {
+      httpOnly: true,
+      sameSite: "lax",
+      // Option A (strict): secure in production only (requires HTTPS to be ready)
+      secure: process.env.NODE_ENV === "production",
+
+      // Option B (flexible): uncomment this and control with env var instead
+      // secure: process.env.SESSION_COOKIE_SECURE === "true",
+
+      maxAge: 1000 * 60 * 60 * 8,
+    },
   })
 );
 
-// ✅ locals AFTER session (single middleware)
+// --- locals (AFTER session) ---
 app.use((req, res, next) => {
   const user = req.session?.user || null;
 
-  // expose to EJS
   res.locals.user = user;
   res.locals.isAdmin = Number(user?.is_admin) === 1;
   res.locals.permissions = Array.isArray(user?.permissions) ? user.permissions : [];
-
-  // optional helper: can("PERM_CODE")
   res.locals.can = (perm) => res.locals.isAdmin || res.locals.permissions.includes(perm);
 
-  // company context
   if (user?.id) {
     if (!res.locals.isAdmin) {
-      req.session.activeCompanyId = user.company_id; // force non-admin
+      req.session.activeCompanyId = user.company_id;
     } else {
       req.session.activeCompanyId = req.session.activeCompanyId ?? user.company_id ?? null;
     }
   }
-  res.locals.activeCompanyId = req.session.activeCompanyId || null;
 
+  res.locals.activeCompanyId = req.session.activeCompanyId || null;
   next();
 });
 
-
-// View engine
+// --- view engine / static ---
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "views"));
-
 app.use(express.static(path.join(__dirname, "public")));
 
-// routes that render views
+// --- routes ---
 app.use(authRoutes);
 app.use(managementRoutes);
 app.use(companyContextRoutes);
 
-// page routes
-app.get("/", requireAuth, (req, res) => {
-  res.redirect("/dashboard");
-});
-
+app.get("/", requireAuth, (req, res) => res.redirect("/dashboard"));
 
 app.get(
   "/dashboard",
@@ -97,10 +116,10 @@ app.get(
     try {
       if (Number(user?.is_admin) === 1) {
         canSeeRates = true;
-        canUseBatch = true; // ✅ admin can batch
+        canUseBatch = true;
       } else {
         canSeeRates = await hasPermission(Number(user?.id), "WORK_ENTRY_EDIT_RATES");
-        canUseBatch = await hasPermission(Number(user?.id), "BATCH_ENTRY"); // ✅ permission
+        canUseBatch = await hasPermission(Number(user?.id), "BATCH_ENTRY");
       }
     } catch (err) {
       console.error("permission check failed:", err);
@@ -111,12 +130,10 @@ app.get(
       user,
       isAdmin: Number(user?.is_admin) === 1,
       canSeeRates,
-      canUseBatch, // ✅ pass to EJS
+      canUseBatch,
     });
   }
 );
-
-
 
 app.get("/workers", requireAuth, requirePermission("PAGE_WORKERS"), (req, res) =>
   res.render("workers", { title: "Workers" })
@@ -134,19 +151,19 @@ app.get("/records", requireAuth, requirePermission("PAGE_RECORDS"), (req, res) =
   res.render("records", { title: "Work Entries Records", active: "records" })
 );
 
-app.get("/reports", requireAuth, requirePermission("PAGE_Reports"), async (req, res) => {
+app.get("/reports", requireAuth, requirePermission("PAGE_REPORTS"), async (req, res) => {
   const user = req.session?.user;
   const userId = Number(user?.id);
 
-  const canFilterPayType =
-    Number(user?.is_admin) === 1
-      ? true
-      : await hasPermission(userId, "REPORT_FILTER_PAYTYPE");
+  let canFilterPayType = false;
+  try {
+    canFilterPayType =
+      Number(user?.is_admin) === 1 ? true : await hasPermission(userId, "REPORT_FILTER_PAYTYPE");
+  } catch (err) {
+    console.error("permission check failed:", err);
+  }
 
-  res.render("reports", {
-    title: "Reports",
-    canFilterPayType, // ✅ now defined in reports.ejs
-  });
+  res.render("reports", { title: "Reports", canFilterPayType });
 });
 
 app.get("/403", (req, res) => {
@@ -160,7 +177,7 @@ app.get("/403", (req, res) => {
   });
 });
 
-// API routes
+// --- API routes ---
 app.use("/api/users", userRoutes);
 app.use("/api/jobs", jobRoutes);
 app.use("/api/workers", workerRoutes);
