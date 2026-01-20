@@ -1,13 +1,15 @@
 // src/config/db.js (PostgreSQL)
+import "./env.js";
 import pg from "pg";
 const { Pool } = pg;
 
+const connectionString = process.env.DATABASE_URL;
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl:
-    process.env.NODE_ENV === "production"
-      ? { rejectUnauthorized: false }
-      : false,
+  connectionString,
+  ssl: process.env.PG_SSL === "true"
+    ? { rejectUnauthorized: false }
+    : false,
 });
 
 // small helper for transactions
