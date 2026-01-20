@@ -763,7 +763,6 @@ router.get("/account-worker-job-listing", async (req, res) => {
   }
 });
 
-
 router.get("/account-worker-job-listing/pdf", async (req, res) => {
   try {
     const companyId = Number(req.query.companyId || 1);
@@ -779,7 +778,7 @@ router.get("/account-worker-job-listing/pdf", async (req, res) => {
 
     const rows = await queryWorkerJobListing({ companyId, start, end, payFilter, jobNoFilter });
 
-    // group by worker (keep same order as SQL output)
+    // group by worker (keep SQL order)
     const workers = [];
     const map = new Map();
     (rows || []).forEach((r) => {
@@ -827,70 +826,49 @@ router.get("/account-worker-job-listing/pdf", async (req, res) => {
     doc.registerFont("NotoSC", fontPath);
     doc.font("NotoSC");
 
-    // ===== Title =====
-    doc.fontSize(14).text("Worker Job Listing 技师工作记录", { align: "center" });
-    doc.moveDown(0.3);
-    doc
-      .fontSize(10)
-      .fillColor("#555")
-      .text(`Company ID: ${companyId}    Date: ${formatDMY(start)} - ${formatDMY(end)}`, {
-        align: "center",
-      });
-    doc.fillColor("#000");
-    doc.moveDown(1);
+    const fmt2 = (v) => num(v).toFixed(2);
 
-    // ===== Table layout =====
+    const drawReportTitle = () => {
+      doc.font("NotoSC").fontSize(14).fillColor("#000").text("Worker Job Listing 技师工作记录", { align: "center" });
+      doc.moveDown(0.2);
+      doc
+        .fontSize(10)
+        .fillColor("#555")
+        .text(`Company ID: ${companyId}    Date: ${formatDMY(start)} - ${formatDMY(end)}`, { align: "center" });
+      doc.fillColor("#000");
+      doc.moveDown(0.8);
+    };
+
     const pageW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
-    const startX = doc.page.margins.left;
-    let y = doc.y;
+    const x0 = doc.page.margins.left;
 
-    // Make columns fit page width (avoid overflow)
+    // Columns (auto-fit)
     const col = { date: 70, bill: 70, job: 0, hours: 55, fee: 70, wage: 70 };
     col.job = pageW - (col.date + col.bill + col.hours + col.fee + col.wage);
 
-    const rowH = 16;
-    const fmt2 = (v) => num(v).toFixed(2);
+    const bottomY = () => doc.page.height - doc.page.margins.bottom;
 
-    const bottomLimit = () => doc.page.height - doc.page.margins.bottom - 30;
-
-    const ensureSpace = (need = 0) => {
-      if (y + need > bottomLimit()) {
-        doc.addPage();
-        y = doc.page.margins.top;
-      }
-    };
-
-    const drawTableHeader = () => {
-      ensureSpace(rowH + 8);
+    const drawTableHeader = (y, fontSize, rowH) => {
       doc.save();
-      doc.rect(startX, y - 2, pageW, rowH + 4).fill("#F2F2F2");
+      doc.rect(x0, y - 2, pageW, rowH + 4).fill("#F2F2F2");
       doc.restore();
 
-      doc.font("NotoSC").fontSize(9).fillColor("#000");
-      let x = startX;
+      doc.font("NotoSC").fontSize(fontSize).fillColor("#000");
+      let x = x0;
       doc.text("日期", x, y, { width: col.date }); x += col.date;
       doc.text("单号", x, y, { width: col.bill }); x += col.bill;
       doc.text("工作项目", x, y, { width: col.job }); x += col.job;
       doc.text("钟点", x, y, { width: col.hours, align: "right" }); x += col.hours;
       doc.text("收费", x, y, { width: col.fee, align: "right" }); x += col.fee;
       doc.text("工资", x, y, { width: col.wage, align: "right" });
-      y += rowH;
+
+      return y + rowH;
     };
 
-    const ensureRow = () => {
-      // keep space for at least 1 row
-      if (y + rowH > bottomLimit()) {
-        doc.addPage();
-        y = doc.page.margins.top;
-        drawTableHeader(); // IMPORTANT: header after page break
-      }
-    };
+    const drawRow = (r, y, fontSize, rowH) => {
+      doc.font("NotoSC").fontSize(fontSize).fillColor("#000");
+      let x = x0;
 
-    const drawRow = (r) => {
-      ensureRow();
-      doc.font("NotoSC").fontSize(9).fillColor("#000");
-
-      let x = startX;
       doc.text(formatDMYFromAny(r.work_date), x, y, { width: col.date }); x += col.date;
       doc.text(String(r.bill_no || "-"), x, y, { width: col.bill }); x += col.bill;
       doc.text(String(r.job_desc || "-"), x, y, { width: col.job, ellipsis: true }); x += col.job;
@@ -898,17 +876,15 @@ router.get("/account-worker-job-listing/pdf", async (req, res) => {
       doc.text(fmt2(r.fee), x, y, { width: col.fee, align: "right" }); x += col.fee;
       doc.text(fmt2(r.wage), x, y, { width: col.wage, align: "right" });
 
-      y += rowH;
+      return y + rowH;
     };
 
-    const drawWorkerTotal = (w) => {
-      ensureRow();
-      doc.font("NotoSC").fontSize(9).fillColor("#000");
+    const drawWorkerTotal = (w, y, fontSize, rowH) => {
+      doc.font("NotoSC").fontSize(fontSize).fillColor("#000");
 
-      // Left text spans to before numeric columns
       const leftW = col.date + col.bill + col.job;
-      const xText = startX;
-      const xHours = startX + leftW;
+      const xText = x0;
+      const xHours = x0 + leftW;
       const xFee = xHours + col.hours;
       const xWage = xFee + col.fee;
 
@@ -919,25 +895,80 @@ router.get("/account-worker-job-listing/pdf", async (req, res) => {
         { width: leftW, align: "left", ellipsis: true }
       );
       doc.text(fmt2(w.total_hours), xHours, y, { width: col.hours, align: "right" });
-      doc.text(fmt2(w.total_fee), xFee, y, { width: col.fee, align: "right" });
+      doc.text("", xFee, y, { width: col.fee, align: "right" });
       doc.text(fmt2(w.total_wage), xWage, y, { width: col.wage, align: "right" });
 
-      y += rowH + 6;
+      return y + rowH;
     };
 
-    // ===== Render each worker =====
-    workers.forEach((w, idx) => {
-      ensureSpace(70);
+    const renderWorkerOnePage = (w, isFirst) => {
+      if (!isFirst) doc.addPage();
 
-      doc.font("NotoSC").fontSize(11).fillColor("#000").text(`${w.worker_code || ""}    ${w.worker_name || ""}`, startX, y);
+      // Reset cursor to top area
+      doc.font("NotoSC").fillColor("#000");
+      let y = doc.page.margins.top;
+
+      // Optional: show report title on every page (looks nicer)
+      drawReportTitle();
+      y = doc.y;
+
+      // Worker header
+      doc.font("NotoSC").fontSize(11).fillColor("#000").text(`${w.worker_code || ""}    ${w.worker_name || ""}`, x0, y);
       y += 18;
 
-      drawTableHeader();
-      (w.rows || []).forEach(drawRow);
-      drawWorkerTotal(w);
+      // Auto-shrink to fit ONE page
+      let rowH = 16;
+      let fontSize = 9;
 
-      if (idx !== workers.length - 1) ensureSpace(30);
-    });
+      const available =
+        bottomY() -
+        y -               // current y
+        10 -              // breathing
+        (rowH + 6);       // total row space
+
+      const maxRowsAtCurrent = Math.floor(available / rowH) - 1; // -1 for header row
+      const totalRowsNeeded = (w.rows || []).length;
+
+      // shrink if too many
+      while (totalRowsNeeded > maxRowsAtCurrent && rowH > 12) {
+        rowH -= 1;
+      }
+      while (totalRowsNeeded > Math.floor(available / rowH) - 1 && fontSize > 7) {
+        fontSize -= 1;
+      }
+
+      // Recompute after shrink
+      const maxRows = Math.floor(available / rowH) - 1;
+
+      // Table header
+      y = drawTableHeader(y, fontSize, rowH);
+
+      // Rows (truncate if still too many)
+      const list = w.rows || [];
+      const showList = list.slice(0, Math.max(0, maxRows));
+
+      showList.forEach((r) => {
+        y = drawRow(r, y, fontSize, rowH);
+      });
+
+      // If truncated, show note
+      if (list.length > showList.length) {
+        doc.font("NotoSC").fontSize(8).fillColor("#B00000");
+        doc.text(`(More rows not shown: ${list.length - showList.length})`, x0, y + 2, {
+          width: pageW,
+          align: "left",
+        });
+        doc.fillColor("#000");
+        y += 12;
+      }
+
+      // Total row
+      y += 4;
+      y = drawWorkerTotal(w, y, fontSize, rowH);
+    };
+
+    // Render
+    workers.forEach((w, idx) => renderWorkerOnePage(w, idx === 0));
 
     doc.end();
   } catch (err) {
@@ -945,6 +976,7 @@ router.get("/account-worker-job-listing/pdf", async (req, res) => {
     res.status(500).send("Failed to generate PDF");
   }
 });
+
 
 
 // =============================
@@ -1328,9 +1360,16 @@ async function queryWorkerPayslipLines({ companyId, workerId, start, end, payFil
   return r.rows || [];
 }
 
-async function queryWorkerPayslipLinesGrouped({ companyId, workerId, start, end, payFilter, jobNoFilter }) {
-  const paySql = payWhereSql(payFilter);         // uses alias we
-  const jobNoSql = jobNoWhereSql(jobNoFilter);   // uses alias we
+async function queryWorkerPayslipLinesGrouped({
+  companyId,
+  workerId,
+  start,
+  end,
+  payFilter,
+  jobNoFilter,
+}) {
+  const paySql = payWhereSql(payFilter);       // uses alias we
+  const jobNoSql = jobNoWhereSql(jobNoFilter); // uses alias we
 
   const sql = `
     SELECT
@@ -1363,6 +1402,49 @@ async function queryWorkerPayslipLinesGrouped({ companyId, workerId, start, end,
   return r.rows || [];
 }
 
+async function getWorkerByIdPg({ companyId, workerId }) {
+  try {
+    const r = await db.query(
+      `SELECT id, worker_code,
+              COALESCE(worker_name, worker_english_name, '') AS worker_name
+       FROM workers
+       WHERE id = $1 AND company_id = $2`,
+      [workerId, companyId]
+    );
+    return r.rows?.[0] || null;
+  } catch {
+    return null;
+  }
+}
+
+function parseWorkerIdsFromQuery(req) {
+  // Accept:
+  // - workerId=3
+  // - workerIds=1,2,3
+  // - workerIds[]=1&workerIds[]=2 (optional)
+  const one = String(req.query.workerId || "").trim();
+  const listRaw =
+    req.query.workerIds ??
+    req.query["workerIds[]"] ??
+    (one ? one : "");
+
+  const arr = Array.isArray(listRaw) ? listRaw : String(listRaw).split(",");
+  const ids = arr
+    .map((x) => Number(String(x).trim()))
+    .filter((n) => Number.isFinite(n) && n > 0);
+
+  // de-dupe keep order
+  const out = [];
+  const seen = new Set();
+  for (const id of ids) {
+    if (!seen.has(id)) {
+      seen.add(id);
+      out.push(id);
+    }
+  }
+  return out;
+}
+
 router.get("/worker-payslip", async (req, res) => {
   try {
     const companyId = Number(req.query.companyId || 1);
@@ -1379,76 +1461,11 @@ router.get("/worker-payslip", async (req, res) => {
       return res.status(400).json({ error: "Invalid start/end date (use YYYY-MM-DD)" });
     if (start > end) return res.status(400).json({ error: "Start date cannot be after end date" });
 
-    const worker = await getWorkerById({ companyId, workerId });
+    const worker = await getWorkerByIdPg({ companyId, workerId });
     if (!worker) return res.status(404).json({ error: "Worker not found." });
 
-    const rows = await queryWorkerPayslipLinesGrouped({
-      companyId,
-      workerId,
-      start,
-      end,
-      payFilter,
-      jobNoFilter,
-    });
-
-    const totals = rows.reduce(
-      (acc, r) => {
-        acc.total_hours += num(r.hours);
-        acc.total_fee += num(r.fee);
-        acc.total_wage += num(r.wage);
-        return acc;
-      },
-      { total_hours: 0, total_fee: 0, total_wage: 0 }
-    );
-
-    res.json({
-      canFilterPayType,
-      worker: { id: worker.id, worker_code: worker.worker_code, worker_name: worker.worker_name },
-      title: monthTitleFromRange(start, end),
-      rows: rows.map((r) => ({
-        job_desc:
-          `${String(r.job_code || "").trim()}${r.job_type ? " - " + String(r.job_type).trim() : ""}`.trim() || "-",
-        hours: num(r.hours),
-        fee: num(r.fee),
-        wage: num(r.wage),
-      })),
-      totals,
-    });
-  } catch (err) {
-    console.error("worker-payslip error:", err);
-    res.status(500).json({ error: "Failed to generate report" });
-  }
-});
-
-router.get("/worker-payslip/pdf", async (req, res) => {
-  try {
-    const companyId = Number(req.query.companyId || 1);
-    const workerId = Number(req.query.workerId || 0);
-    const start = req.query.start;
-    const end = req.query.end;
-
-    const { payFilter } = await resolvePayFilter(req);
-    const jobNoFilter = resolveJobNoFilter(req);
-
-    if (!companyId || companyId <= 0) return res.status(400).send("Invalid companyId");
-    if (!workerId || workerId <= 0) return res.status(400).send("Please select a worker.");
-    if (!isValidISODate(start) || !isValidISODate(end))
-      return res.status(400).send("Invalid start/end date (use YYYY-MM-DD)");
-    if (start > end) return res.status(400).send("Start date cannot be after end date");
-
-    const worker = await getWorkerById({ companyId, workerId });
-    if (!worker) return res.status(404).send("Worker not found.");
-
-    // company name (pg)
-    let companyName = "";
-    try {
-      const c = await db.query(`SELECT name FROM companies WHERE id = $1`, [companyId]);
-      companyName = String(c.rows?.[0]?.name || "").trim();
-    } catch (e) {
-      companyName = "";
-    }
-
-    const rowsRaw = await queryWorkerPayslipLines({
+    // ✅ Preview uses grouped rows (same as PDF)
+    const rowsRaw = await queryWorkerPayslipLinesGrouped({
       companyId,
       workerId,
       start,
@@ -1475,6 +1492,45 @@ router.get("/worker-payslip/pdf", async (req, res) => {
       { total_hours: 0, total_fee: 0, total_wage: 0 }
     );
 
+    res.json({
+      canFilterPayType,
+      worker: { id: worker.id, worker_code: worker.worker_code, worker_name: worker.worker_name },
+      title: monthTitleFromRange(start, end),
+      rows,
+      totals,
+    });
+  } catch (err) {
+    console.error("worker-payslip error:", err);
+    res.status(500).json({ error: "Failed to generate report" });
+  }
+});
+
+router.get("/worker-payslip/pdf", async (req, res) => {
+  try {
+    const companyId = Number(req.query.companyId || 1);
+    const start = req.query.start;
+    const end = req.query.end;
+
+    const workerIds = parseWorkerIdsFromQuery(req);
+
+    const { payFilter } = await resolvePayFilter(req);
+    const jobNoFilter = resolveJobNoFilter(req);
+
+    if (!companyId || companyId <= 0) return res.status(400).send("Invalid companyId");
+    if (!workerIds.length) return res.status(400).send("Please select at least one worker.");
+    if (!isValidISODate(start) || !isValidISODate(end))
+      return res.status(400).send("Invalid start/end date (use YYYY-MM-DD)");
+    if (start > end) return res.status(400).send("Start date cannot be after end date");
+
+    // company name
+    let companyName = "";
+    try {
+      const c = await db.query(`SELECT name FROM companies WHERE id = $1`, [companyId]);
+      companyName = String(c.rows?.[0]?.name || "").trim();
+    } catch {
+      companyName = "";
+    }
+
     const monthYearLabel = (isoDate) => {
       const m = String(isoDate || "").slice(5, 7);
       const y = String(isoDate || "").slice(0, 4);
@@ -1497,7 +1553,7 @@ router.get("/worker-payslip/pdf", async (req, res) => {
 
     const titleCn = monthTitleFromRange(start, end);
 
-    const filename = `Worker_Payslip_${workerId}_${start}_to_${end}.pdf`;
+    const filename = `Worker_Payslip_${workerIds.join("-")}_${start}_to_${end}.pdf`;
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
 
@@ -1510,149 +1566,197 @@ router.get("/worker-payslip/pdf", async (req, res) => {
 
     const fmt2 = (v) => num(v).toFixed(2);
 
-    // ===== Header (Access-like) =====
-    doc.fontSize(14).text(titleCn, { align: "center" });
-    doc.moveDown(0.6);
+    const renderOneWorker = async (workerId, isFirstPage) => {
+      const worker = await getWorkerByIdPg({ companyId, workerId });
+      if (!worker) return; // skip missing worker id silently
 
-    doc.fontSize(10).text(`${worker.worker_code || ""}    ${worker.worker_name || ""}`, { align: "left" });
-    doc.moveDown(0.4);
+      const grouped = await queryWorkerPayslipLinesGrouped({
+        companyId,
+        workerId,
+        start,
+        end,
+        payFilter,
+        jobNoFilter,
+      });
 
-    // ===== Table =====
-    const pageW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
-    const x0 = doc.page.margins.left;
-    let y = doc.y;
+      const rows = (grouped || []).map((r) => ({
+        job_desc:
+          `${String(r.job_code || "").trim()}${r.job_type ? " - " + String(r.job_type).trim() : ""}`.trim() || "-",
+        hours: num(r.hours),
+        fee: num(r.fee),
+        wage: num(r.wage),
+      }));
 
-    const rowH = 16;
+      const totals = rows.reduce(
+        (acc, r) => {
+          acc.total_hours += num(r.hours);
+          acc.total_fee += num(r.fee);
+          acc.total_wage += num(r.wage);
+          return acc;
+        },
+        { total_hours: 0, total_fee: 0, total_wage: 0 }
+      );
 
-    const col = {
-      job: Math.floor(pageW * 0.60),
-      hours: Math.floor(pageW * 0.13),
-      fee: Math.floor(pageW * 0.14),
-      wage: Math.floor(pageW * 0.13),
-    };
+      if (!isFirstPage) doc.addPage();
 
-    const tableRight = x0 + pageW;
-    const tableBottomLimit = () => doc.page.height - doc.page.margins.bottom - 230; // reserve footer space
+      // ===== Header =====
+      doc.font("NotoSC").fontSize(14).fillColor("#000").text(titleCn, { align: "center" });
+      doc.moveDown(0.6);
 
-    const drawCell = (text, x, y0, w, align = "left") => {
+      doc.fontSize(10).text(`${worker.worker_code || ""}    ${worker.worker_name || ""}`, { align: "left" });
+      doc.moveDown(0.4);
+
+      // ===== Table =====
+      const pageW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+      const x0 = doc.page.margins.left;
+      let y = doc.y;
+
+      const rowH = 16;
+
+      const col = {
+        job: Math.floor(pageW * 0.60),
+        hours: Math.floor(pageW * 0.13),
+        fee: Math.floor(pageW * 0.14),
+        wage: Math.floor(pageW * 0.13),
+      };
+
+      const tableRight = x0 + pageW;
+      const tableBottomLimit = () => doc.page.height - doc.page.margins.bottom - 230; // footer space
+
+      const drawCell = (text, x, y0, w, align = "left") => {
+        doc.save();
+        doc.lineWidth(0.6).strokeColor("#999");
+        doc.rect(x, y0, w, rowH).stroke();
+        doc.restore();
+
+        doc.font("NotoSC").fontSize(9).fillColor("#000");
+        const padX = 4;
+        const padY = 4;
+
+        doc.text(String(text ?? ""), x + padX, y0 + padY, {
+          width: w - padX * 2,
+          align,
+          ellipsis: true,
+        });
+      };
+
+      const drawTableHeader = () => {
+        doc.save();
+        doc.rect(x0, y, pageW, rowH).fill("#F3D7B5");
+        doc.restore();
+
+        let x = x0;
+        drawCell("项目", x, y, col.job, "center"); x += col.job;
+        drawCell("时钟", x, y, col.hours, "center"); x += col.hours;
+        drawCell("收费", x, y, col.fee, "center"); x += col.fee;
+        drawCell("工资", x, y, col.wage, "center");
+        y += rowH;
+      };
+
+      const ensureRowSpace = () => {
+        if (y + rowH > tableBottomLimit()) {
+          doc.addPage();
+          y = doc.page.margins.top;
+          // re-print title + worker line on continued pages (optional, looks nicer)
+          doc.font("NotoSC").fontSize(12).fillColor("#000").text(titleCn, { align: "center" });
+          doc.moveDown(0.3);
+          doc.fontSize(10).text(`${worker.worker_code || ""}    ${worker.worker_name || ""}`, { align: "left" });
+          doc.moveDown(0.4);
+          y = doc.y;
+          drawTableHeader();
+        }
+      };
+
+      drawTableHeader();
+
+      rows.forEach((r) => {
+        ensureRowSpace();
+        let x = x0;
+        drawCell(r.job_desc, x, y, col.job, "left"); x += col.job;
+        drawCell(fmt2(r.hours), x, y, col.hours, "right"); x += col.hours;
+        drawCell(fmt2(r.fee), x, y, col.fee, "right"); x += col.fee;
+        drawCell(fmt2(r.wage), x, y, col.wage, "right");
+        y += rowH;
+      });
+
+      // TOTAL row
+      ensureRowSpace();
       doc.save();
-      doc.lineWidth(0.6).strokeColor("#999");
-      doc.rect(x, y0, w, rowH).stroke();
+      doc.rect(x0, y, pageW, rowH).fill("#FFF3CD");
       doc.restore();
 
-      doc.fontSize(9).fillColor("#000").font("NotoSC");
-      const padX = 4;
-      const padY = 4;
-      doc.text(String(text ?? ""), x + padX, y0 + padY, {
-        width: w - padX * 2,
-        align,
-        ellipsis: true,
+      let x = x0;
+      drawCell("TOTAL", x, y, col.job, "left"); x += col.job;
+      drawCell(fmt2(totals.total_hours), x, y, col.hours, "right"); x += col.hours;
+      drawCell("", x, y, col.fee, "right"); x += col.fee;
+      drawCell(fmt2(totals.total_wage), x, y, col.wage, "right");
+      y += rowH;
+
+      // ===== Divider =====
+      const dividerY = Math.max(y + 18, doc.page.height - doc.page.margins.bottom - 210);
+      doc.save();
+      doc.strokeColor("#2C7BE5");
+      doc.lineWidth(1);
+      doc.dash(2, { space: 2 });
+      doc.moveTo(x0, dividerY).lineTo(tableRight, dividerY).stroke();
+      doc.undash();
+      doc.restore();
+
+      // ===== Footer =====
+      const footerTop = dividerY + 20;
+
+      doc.fontSize(12).fillColor("#000");
+      doc.text((companyName || "DEFAULT COMPANY").toUpperCase(), x0, footerTop, {
+        width: pageW,
+        align: "center",
+      });
+
+      doc.fontSize(9).fillColor("#000");
+      doc.text(`${formatDMY(start)}   till   ${formatDMY(end)}`, x0, footerTop + 18, {
+        width: pageW,
+        align: "center",
+      });
+
+      const leftX = x0;
+      const rightX = x0 + Math.floor(pageW * 0.58);
+      const blockY = footerTop + 55;
+
+      const leftW = Math.floor(pageW * 0.56);
+      const rightW = pageW - (rightX - x0);
+
+      const monthOf = monthYearLabel(end);
+
+      doc.fontSize(9).fillColor("#000");
+      doc.text(`Worker wages for the month of  :    ${monthOf}`, leftX, blockY, {
+        width: leftW,
+        align: "left",
+      });
+      doc.text(`I am hereby acknowledging the receipts of my wages`, leftX, blockY + 14, {
+        width: leftW,
+        align: "left",
+      });
+      doc.text(`amounting to RM ${fmt2(totals.total_wage)}`, leftX, blockY + 28, {
+        width: leftW,
+        align: "left",
+      });
+
+      doc.text(`签名：  ______________________________`, rightX, blockY + 28, {
+        width: rightW,
+        align: "left",
+      });
+
+      doc.text(`编号： ${worker.worker_code || ""}    ${worker.worker_name || ""}`, rightX, blockY + 55, {
+        width: rightW,
+        align: "left",
       });
     };
 
-    const drawTableHeader = () => {
-      doc.save();
-      doc.rect(x0, y, pageW, rowH).fill("#F3D7B5");
-      doc.restore();
-
-      let x = x0;
-      drawCell("项目", x, y, col.job, "center"); x += col.job;
-      drawCell("时钟", x, y, col.hours, "center"); x += col.hours;
-      drawCell("收费", x, y, col.fee, "center"); x += col.fee;
-      drawCell("工资", x, y, col.wage, "center");
-      y += rowH;
-    };
-
-    const ensureRowSpace = () => {
-      if (y + rowH > tableBottomLimit()) {
-        doc.addPage();
-        y = doc.page.margins.top;
-        drawTableHeader(); // IMPORTANT: header after page break
-      }
-    };
-
-    drawTableHeader();
-
-    rows.forEach((r) => {
-      ensureRowSpace();
-      let x = x0;
-      drawCell(r.job_desc, x, y, col.job, "left"); x += col.job;
-      drawCell(fmt2(r.hours), x, y, col.hours, "right"); x += col.hours;
-      drawCell(fmt2(r.fee), x, y, col.fee, "right"); x += col.fee;
-      drawCell(fmt2(r.wage), x, y, col.wage, "right");
-      y += rowH;
-    });
-
-    // TOTAL row
-    ensureRowSpace();
-    doc.save();
-    doc.rect(x0, y, pageW, rowH).fill("#FFF3CD");
-    doc.restore();
-
-    let x = x0;
-    drawCell("TOTAL", x, y, col.job, "left"); x += col.job;
-    drawCell(fmt2(totals.total_hours), x, y, col.hours, "right"); x += col.hours;
-    drawCell("", x, y, col.fee, "right"); x += col.fee;
-    drawCell(fmt2(totals.total_wage), x, y, col.wage, "right");
-    y += rowH;
-
-    // ===== Divider =====
-    const dividerY = Math.max(y + 18, doc.page.height - doc.page.margins.bottom - 210);
-    doc.save();
-    doc.strokeColor("#2C7BE5");
-    doc.lineWidth(1);
-    doc.dash(2, { space: 2 });
-    doc.moveTo(x0, dividerY).lineTo(tableRight, dividerY).stroke();
-    doc.undash();
-    doc.restore();
-
-    // ===== Footer =====
-    const footerTop = dividerY + 20;
-
-    doc.fontSize(12).fillColor("#000");
-    doc.text((companyName || "DEFAULT COMPANY").toUpperCase(), x0, footerTop, {
-      width: pageW,
-      align: "center",
-    });
-
-    doc.fontSize(9).fillColor("#000");
-    doc.text(`${formatDMY(start)}   till   ${formatDMY(end)}`, x0, footerTop + 18, {
-      width: pageW,
-      align: "center",
-    });
-
-    const leftX = x0;
-    const rightX = x0 + Math.floor(pageW * 0.58);
-    const blockY = footerTop + 55;
-
-    const leftW = Math.floor(pageW * 0.56);
-    const rightW = pageW - (rightX - x0);
-
-    const monthOf = monthYearLabel(end);
-
-    doc.fontSize(9).fillColor("#000");
-    doc.text(`Worker wages for the month of  :    ${monthOf}`, leftX, blockY, {
-      width: leftW,
-      align: "left",
-    });
-    doc.text(`I am hereby acknowledging the receipts of my wages`, leftX, blockY + 14, {
-      width: leftW,
-      align: "left",
-    });
-    doc.text(`amounting to RM ${fmt2(totals.total_wage)}`, leftX, blockY + 28, {
-      width: leftW,
-      align: "left",
-    });
-
-    doc.text(`签名：  ______________________________`, rightX, blockY + 28, {
-      width: rightW,
-      align: "left",
-    });
-
-    doc.text(`编号： ${worker.worker_code || ""}    ${worker.worker_name || ""}`, rightX, blockY + 55, {
-      width: rightW,
-      align: "left",
-    });
+    // render in order, one worker per page
+    let printed = 0;
+    for (const wid of workerIds) {
+      await renderOneWorker(wid, printed === 0);
+      printed += 1;
+    }
 
     doc.end();
   } catch (err) {
