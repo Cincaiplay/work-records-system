@@ -22,6 +22,7 @@ import companyContextRoutes from "./src/routes/companyContextRoutes.js";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const HOST = process.env.HOST || "0.0.0.0";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -182,6 +183,6 @@ app.use("/api", rulesRoutes);
 app.use("/api/reports", reportRoutes);
 app.use("/api/wage-tiers", wageTierRoutes);
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running at http://localhost:${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`🚀 Server running on ${HOST}:${PORT}`);
 });
