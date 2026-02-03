@@ -77,8 +77,6 @@ function applyRatesVisibility() {
 }
 
 function applyBatchSwitchVisibility() {
-  const isAdmin = String(document.body?.dataset?.isAdmin || "0") === "1";
-
   const row = $("batchModeSwitchRow");
   const sw = $("batchModeSwitch");
   const singleModeDiv = $("singleEntryMode");
@@ -86,19 +84,9 @@ function applyBatchSwitchVisibility() {
 
   if (!row || !sw || !singleModeDiv || !batchModeDiv) return;
 
-  if (!isAdmin) {
-    // hide the switch UI
-    row.style.display = "none";
-
-    // force OFF and force single mode
-    sw.checked = false;
-    singleModeDiv.style.display = "";
-    batchModeDiv.style.display = "none";
-    return;
-  }
-
-  // admin can see it
   row.style.display = "";
+  sw.disabled = false;
+  row.title = "";
 }
 
 
@@ -368,6 +356,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     isBank.addEventListener("change", sync);
     sync();
   }
+
+  applyBatchSwitchVisibility();
 
   // batch switch
   const batchSwitch = $("batchModeSwitch");
