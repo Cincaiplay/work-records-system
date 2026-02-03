@@ -1,4 +1,4 @@
-
+﻿
 <div class="tab-pane fade <%= activeTab === "roles" ? "show active" : "" %>"
      id="pane-roles" role="tabpanel" aria-labelledby="tab-roles" tabindex="0">
 
@@ -32,6 +32,12 @@
           </select>
         </div>
 
+        <div class="col-md-4">
+          <label class="form-label">Work Entries Days Limit</label>
+          <input name="work_entries_days_limit" class="form-control" type="number" min="1" step="1"
+                 placeholder="Leave blank for no limit" />
+        </div>
+
         <div class="col-12">
           <label class="form-label">Description (optional)</label>
           <input name="description" class="form-control" placeholder="What can this role do?" />
@@ -63,6 +69,7 @@
               <th>Code</th>
               <th>Name</th>
               <th>Description</th>
+              <th>Days Limit</th>
               <th class="text-end">Actions</th>
             </tr>
           </thead>
@@ -75,7 +82,19 @@
                 </td>
                 <td class="fw-semibold"><%= r.code %></td>
                 <td><%= r.name %></td>
-                <td class="text-muted small"><%= r.description || "—" %></td>
+                <td class="text-muted small"><%= r.description || "—" %></td>                <td>
+                  <form method="POST" action="/management/roles/<%= r.id %>/limit" class="d-flex gap-2 align-items-center">
+                    <input name="work_entries_days_limit"
+                           class="form-control form-control-sm"
+                           type="number"
+                           min="1"
+                           step="1"
+                           style="width: 120px;"
+                           value="<%= r.work_entries_days_limit != null ? r.work_entries_days_limit : '' %>"
+                           placeholder="—" />
+                    <button class="btn btn-sm btn-outline-secondary" type="submit">Save</button>
+                  </form>
+                </td>
                 <td class="text-end">
                   <button class="btn btn-sm btn-outline-primary"
                           data-bs-toggle="modal"
@@ -178,7 +197,7 @@
 
             <% if (rolesSafe.length === 0) { %>
               <tr>
-                <td colspan="6" class="text-center text-muted py-4">No roles found.</td>
+                <td colspan="7" class="text-center text-muted py-4">No roles found.</td>
               </tr>
             <% } %>
           </tbody>
@@ -189,3 +208,4 @@
   </div>
 
 </div>
+

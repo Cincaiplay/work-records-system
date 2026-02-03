@@ -269,20 +269,50 @@ router.post("/management/roles/create", requireAdmin, async (req, res) => {
   const name = (req.body.name || "").trim();
   const description = (req.body.description || "").trim() || null;
   const company_id = req.body.company_id !== "" ? Number(req.body.company_id) : null;
+  const limitRaw = req.body.work_entries_days_limit;
+  const work_entries_days_limit =
+    limitRaw === "" || limitRaw == null ? null : Number(limitRaw);
 
   if (!code || !name) {
     return redirectMgmt(res, "roles", { error: "Code & name required" });
+  }
+  if (work_entries_days_limit != null && (!Number.isFinite(work_entries_days_limit) || work_entries_days_limit <= 0)) {
+    return redirectMgmt(res, "roles", { error: "Days limit must be a positive number" });
   }
 
   try {
     await db.query(
       `
-      INSERT INTO roles (company_id, code, name, description)
-      VALUES ($1, $2, $3, $4)
+      INSERT INTO roles (company_id, code, name, description, work_entries_days_limit)
+      VALUES ($1, $2, $3, $4, $5)
       `,
-      [company_id, code, name, description]
+      [company_id, code, name, description, work_entries_days_limit]
     );
     return redirectMgmt(res, "roles", { success: "Role created" });
+  } catch (err) {
+    return redirectMgmt(res, "roles", { error: err.message });
+  }
+});
+
+router.post("/management/roles/:id/limit", requireAdmin, async (req, res) => {
+  const roleId = Number(req.params.id);
+  const limitRaw = req.body.work_entries_days_limit;
+  const work_entries_days_limit =
+    limitRaw === "" || limitRaw == null ? null : Number(limitRaw);
+
+  if (!Number.isFinite(roleId) || roleId <= 0) {
+    return redirectMgmt(res, "roles", { error: "Invalid role id" });
+  }
+  if (work_entries_days_limit != null && (!Number.isFinite(work_entries_days_limit) || work_entries_days_limit <= 0)) {
+    return redirectMgmt(res, "roles", { error: "Days limit must be a positive number" });
+  }
+
+  try {
+    await db.query(
+      `UPDATE roles SET work_entries_days_limit = $1 WHERE id = $2`,
+      [work_entries_days_limit, roleId]
+    );
+    return redirectMgmt(res, "roles", { success: "Days limit updated" });
   } catch (err) {
     return redirectMgmt(res, "roles", { error: err.message });
   }

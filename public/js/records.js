@@ -550,11 +550,11 @@ function renderRecordsTable() {
       <td class="text-end">${entryHoursTotal.toFixed(1)}</td>
       <td class="text-end fw-bold">${Number(h.fees_collected || 0).toFixed(2)}</td>
 
-      <td></td>
-      <td class="text-end fw-bold">${entryCustTotal.toFixed(2)}</td>
+      <td data-col="cust_rate"></td>
+      <td class="text-end fw-bold" data-col="cust_total">${entryCustTotal.toFixed(2)}</td>
 
-      <td></td>
-      <td class="text-end fw-bold">${entryWageTotal.toFixed(2)}</td>
+      <td data-col="wage_rate"></td>
+      <td class="text-end fw-bold" data-col="wage_total">${entryWageTotal.toFixed(2)}</td>
 
       <td class="text-muted small">${escapeHtml(h.note || "-")}</td>
       <td class="text-end text-muted">${payTypeText}</td>
@@ -1195,5 +1195,27 @@ document.addEventListener("DOMContentLoaded", () => {
       const sortType = this.dataset.sort;
       sortRecords(sortType);
     });
+  });
+
+  document.getElementById("exportRecordsBtn")?.addEventListener("click", () => {
+    const companyId = getCurrentCompanyIdSafe();
+    const params = new URLSearchParams();
+    params.set("companyId", String(companyId));
+
+    const dateFrom = document.getElementById("filterDateFrom")?.value || "";
+    const dateTo = document.getElementById("filterDateTo")?.value || "";
+    const jobNo = (document.getElementById("filterJobNo")?.value || "").trim();
+    const worker = (document.getElementById("filterWorker")?.value || "").trim();
+    const job = (document.getElementById("filterJob")?.value || "").trim();
+    const note = (document.getElementById("filterNote")?.value || "").trim();
+
+    if (dateFrom) params.set("dateFrom", dateFrom);
+    if (dateTo) params.set("dateTo", dateTo);
+    if (jobNo) params.set("jobNo", jobNo);
+    if (worker) params.set("worker", worker);
+    if (job) params.set("job", job);
+    if (note) params.set("note", note);
+
+    window.open(`/api/work-entries/export?${params.toString()}`, "_blank");
   });
 });

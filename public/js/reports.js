@@ -67,6 +67,11 @@ function getJobNoQuery() {
   return `&jobno1=${j1}&jobno2=${j2}`;
 }
 
+function getLangQuery() {
+  const lang = document.getElementById("reportLang")?.value || "en";
+  return `&lang=${encodeURIComponent(lang)}`;
+}
+
 function wireJobNoFilterRules() {
   const j1 = document.getElementById("filterJobNo1");
   const j2 = document.getElementById("filterJobNo2");
@@ -313,7 +318,7 @@ function showOrHideWorkerPicker(reportKey) {
   const box = document.getElementById("workerPickerBox");
   if (!box) return;
 
-  const show = reportKey === "worker-payslip";
+  const show = reportKey === "worker-payslip" || reportKey === "account-worker-job-listing";
   box.style.display = show ? "" : "none";
   if (!show) return;
 
@@ -612,7 +617,9 @@ function exportWorkerMonthlyPaysPdf() {
   const endDate = document.getElementById("reportEndDate")?.value || "";
   if (!startDate || !endDate) return alert("Please select start and end date.");
 
-  const qs = getPayTypeQuery() + getJobNoQuery();
+  const workerIds = getSelectedWorkerIds();
+  const wq = workerIds.length ? buildWorkerIdsQueryParam(workerIds) : "";
+  const qs = getPayTypeQuery() + getJobNoQuery() + getLangQuery() + wq;
   window.open(
     `/api/reports/worker-monthly-pays/pdf?companyId=${companyId}&start=${startDate}&end=${endDate}${qs}`,
     "_blank"
@@ -645,7 +652,7 @@ function exportSalesListingPdf() {
   const endDate = document.getElementById("reportEndDate")?.value || "";
   if (!startDate || !endDate) return alert("Please select start and end date.");
 
-  const qs = getPayTypeQuery() + getJobNoQuery();
+  const qs = getPayTypeQuery() + getJobNoQuery() + getLangQuery();
   window.open(
     `/api/reports/sales-listing/pdf?companyId=${companyId}&start=${startDate}&end=${endDate}${qs}`,
     "_blank"
@@ -661,7 +668,9 @@ async function previewWorkerJobListing() {
   document.getElementById("reportContent").innerHTML =
     `<div class="text-muted small">Loading...</div>`;
 
-  const qs = getPayTypeQuery() + getJobNoQuery();
+  const workerIds = getSelectedWorkerIds();
+  const wq = workerIds.length ? buildWorkerIdsQueryParam(workerIds) : "";
+  const qs = getPayTypeQuery() + getJobNoQuery() + wq;
   const url = `/api/reports/account-worker-job-listing?companyId=${companyId}&start=${startDate}&end=${endDate}${qs}`;
 
   const res = await fetch(url);
@@ -678,7 +687,7 @@ function exportWorkerJobListingPdf() {
   const endDate = document.getElementById("reportEndDate")?.value || "";
   if (!startDate || !endDate) return alert("Please select start and end date.");
 
-  const qs = getPayTypeQuery() + getJobNoQuery();
+  const qs = getPayTypeQuery() + getJobNoQuery() + getLangQuery();
   window.open(
     `/api/reports/account-worker-job-listing/pdf?companyId=${companyId}&start=${startDate}&end=${endDate}${qs}`,
     "_blank"
@@ -704,11 +713,6 @@ function renderMonthlySummaryHtml(rows, totals) {
       <td class="text-end text-danger">${fmt2(r.bank_wage)}</td>
       <td class="text-end text-success">${fmt2(r.cash_wage)}</td>
       <td class="text-end fw-semibold">${fmt2(r.total_wage)}</td>
-
-      <td class="text-end" style="color:#a85b00;">${fmt2(r.total_hours)}</td>
-      <td class="text-end" style="color:#a85b00;">${fmt2(r.fee_rate)}</td>
-      <td class="text-end" style="color:#a85b00;">${fmt2(r.wage_rate)}</td>
-      <td class="text-end text-primary">${fmt2(r.pct)}</td>
     </tr>
   `).join("");
 
@@ -723,11 +727,6 @@ function renderMonthlySummaryHtml(rows, totals) {
       <td class="text-end fw-bold text-danger">${fmt2(t.bank_wage)}</td>
       <td class="text-end fw-bold text-success">${fmt2(t.cash_wage)}</td>
       <td class="text-end fw-bold">${fmt2(t.total_wage)}</td>
-
-      <td class="text-end fw-bold" style="color:#a85b00;">${fmt2(t.total_hours)}</td>
-      <td class="text-end fw-bold" style="color:#a85b00;">${fmt2(t.fee_rate)}</td>
-      <td class="text-end fw-bold" style="color:#a85b00;">${fmt2(t.wage_rate)}</td>
-      <td class="text-end fw-bold text-primary">${fmt2(t.pct)}</td>
     </tr>
   `;
 
@@ -745,11 +744,6 @@ function renderMonthlySummaryHtml(rows, totals) {
             <th class="text-end">工资 银行工资</th>
             <th class="text-end">工资 现金工资</th>
             <th class="text-end">工资 总工资</th>
-
-            <th class="text-end">总钟点</th>
-            <th class="text-end">收费钟价</th>
-            <th class="text-end">工资钟价</th>
-            <th class="text-end">%</th>
           </tr>
         </thead>
         <tbody>
@@ -792,7 +786,7 @@ function exportMonthlySummaryPdf() {
   const endDate = document.getElementById("reportEndDate")?.value || "";
   if (!startDate || !endDate) return alert("Please select start and end date.");
 
-  const qs = getPayTypeQuery() + getJobNoQuery();
+  const qs = getPayTypeQuery() + getJobNoQuery() + getLangQuery();
   window.open(
     `/api/reports/monthly-summary/pdf?companyId=${companyId}&start=${startDate}&end=${endDate}${qs}`,
     "_blank"
@@ -898,7 +892,7 @@ function exportWorkerPayslipPdf() {
   if (!workerIds.length) return alert("Please select worker(s).");
   if (!startDate || !endDate) return alert("Please select start and end date.");
 
-  const qs = getPayTypeQuery() + getJobNoQuery();
+  const qs = getPayTypeQuery() + getJobNoQuery() + getLangQuery();
   const wq = buildWorkerIdsQueryParam(workerIds);
 
   window.open(
