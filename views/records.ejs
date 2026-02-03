@@ -95,7 +95,7 @@
           </ul>
         </div>
 
-        <button class="btn btn-outline-secondary rounded-pill" disabled title="Later">
+        <button class="btn btn-outline-success rounded-pill" id="exportRecordsBtn">
           <i class="bi bi-download"></i> Export
         </button>
       </div>
@@ -155,7 +155,7 @@
 
             <tbody id="recordsBody">
               <tr>
-                <td id="recordsLoadingCell" colspan="14" class="text-center text-muted py-4">
+                <td id="recordsLoadingCell" colspan="15" class="text-center text-muted py-4">
                   <div class="spinner-border spinner-border-sm me-2" role="status"></div>
                   Loading records...
                 </td>
@@ -164,21 +164,21 @@
 
             <tfoot>
               <tr class="fw-bold" id="recordsFeesTotalRow">
-                <td id="recordsFeesLabelCell" colspan="14" class="text-end text-dark">
+                <td id="recordsFeesLabelCell" colspan="15" class="text-end text-dark">
                   GRAND TOTAL (ACTUAL COLLECTED):
                 </td>
                 <td class="text-dark" id="recordsGrandTotalFees">0.00</td>
               </tr>
 
               <tr class="fw-bold" id="recordsCustomerTotalRow">
-                <td id="recordsCustomerLabelCell" colspan="14" class="text-end text-success">
+                <td id="recordsCustomerLabelCell" colspan="15" class="text-end text-success">
                   GRAND TOTAL (CUSTOMER):
                 </td>
                 <td class="text-success" id="recordsGrandTotalCustomer">0.00</td>
               </tr>
 
               <tr class="fw-bold" id="recordsWageTotalRow">
-                <td id="recordsWageLabelCell" colspan="14" class="text-end text-primary">
+                <td id="recordsWageLabelCell" colspan="15" class="text-end text-primary">
                   TOTAL WAGES:
                 </td>
                 <td class="text-primary" id="recordsGrandTotalWage">0.00</td>

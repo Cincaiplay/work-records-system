@@ -1,7 +1,7 @@
 // src/routes/workEntryRoutes.js (PostgreSQL)
 import { Router } from "express";
 import db from "../config/db.js";
-import { requirePermission } from "../middleware/permission.js";
+import { requirePermission, hasPermission } from "../middleware/permission.js";
 
 const router = Router();
 
@@ -22,9 +22,16 @@ function getCompanyId(req) {
 }
 
 async function getDaysLimitForUser(req) {
-  const userId = req.session?.user?.id;
-  const isAdmin = Number(req.session?.user?.is_admin) === 1;
+  const user = req.session?.user;
+  const userId = user?.id;
+  const isAdmin = Number(user?.is_admin) === 1;
+
   if (!userId || isAdmin) return null;
+
+  // ✅ Permission override (Option A)
+  if (user?.permissions?.includes("VIEW_FULL_HISTORY")) {
+    return null;
+  }
 
   const r = await db.query(
     `
@@ -52,6 +59,11 @@ async function getDaysLimitForUser(req) {
   return limit;
 }
 
+
+
+
+
+
 /* =========================
    Small utils
    ========================= */
@@ -61,6 +73,14 @@ const toNum = (v) => {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 };
+
+function csvEscape(v) {
+  if (v == null) return "";
+  let s = String(v);
+  if (s.includes('"')) s = s.replace(/"/g, '""');
+  if (/[",\n\r]/.test(s)) s = `"${s}"`;
+  return s;
+}
 
 /* =========================
    GET /api/work-entries
@@ -88,7 +108,7 @@ router.get("/", async (req, res) => {
         we.worker_id,
         wk.worker_code,
         wk.worker_name,
-        we.work_date,
+        we.work_date::text AS work_date,
         we.job_no1,
         we.job_no2,
         we.fees_collected,   -- header only
@@ -160,6 +180,147 @@ router.get("/", async (req, res) => {
   } catch (err) {
     console.error("GET /api/work-entries error:", err);
     return res.status(500).json({ error: "Database error" });
+  }
+});
+
+/* =========================
+   EXPORT /api/work-entries/export
+   CSV export (flat rows)
+   ========================= */
+router.get("/export", async (req, res) => {
+  const companyId = getCompanyId(req);
+
+  try {
+    const user = req.session?.user;
+    const userId = Number(user?.id);
+    const canSeeRates =
+      Number(user?.is_admin) === 1 ? true : await hasPermission(userId, "WORK_ENTRY_EDIT_RATES");
+
+    const daysLimit = await getDaysLimitForUser(req);
+
+    const params = [companyId];
+    let whereSql = "";
+
+    if (daysLimit != null) {
+      params.push(daysLimit);
+      whereSql += ` AND we.work_date >= (CURRENT_DATE - ($${params.length} * INTERVAL '1 day')) `;
+    }
+
+    const dateFrom = (req.query.dateFrom || "").trim();
+    const dateTo = (req.query.dateTo || "").trim();
+    const jobNo = (req.query.jobNo || "").trim().toLowerCase();
+    const worker = (req.query.worker || "").trim().toLowerCase();
+    const job = (req.query.job || "").trim().toLowerCase();
+    const note = (req.query.note || "").trim().toLowerCase();
+
+    if (dateFrom) {
+      params.push(dateFrom);
+      whereSql += ` AND we.work_date >= $${params.length}::date `;
+    }
+    if (dateTo) {
+      params.push(dateTo);
+      whereSql += ` AND we.work_date <= $${params.length}::date `;
+    }
+    if (jobNo) {
+      params.push(`%${jobNo}%`);
+      whereSql += ` AND (LOWER(COALESCE(we.job_no1,'')) LIKE $${params.length} OR LOWER(COALESCE(we.job_no2,'')) LIKE $${params.length}) `;
+    }
+    if (worker) {
+      params.push(`%${worker}%`);
+      whereSql += ` AND (LOWER(COALESCE(wk.worker_code,'')) LIKE $${params.length} OR LOWER(COALESCE(wk.worker_name,'')) LIKE $${params.length}) `;
+    }
+    if (job) {
+      params.push(`%${job}%`);
+      whereSql += ` AND (LOWER(COALESCE(j.job_code,'')) LIKE $${params.length} OR LOWER(COALESCE(j.job_type,'')) LIKE $${params.length}) `;
+    }
+    if (note) {
+      params.push(`%${note}%`);
+      whereSql += ` AND LOWER(COALESCE(we.note,'')) LIKE $${params.length} `;
+    }
+
+    const r = await db.query(
+      `
+      SELECT
+        we.work_date::text AS work_date,
+        we.job_no1,
+        we.job_no2,
+        we.fees_collected,
+        we.is_bank,
+        we.note,
+        wk.worker_code,
+        wk.worker_name,
+        j.job_code,
+        j.job_type,
+        wej.hours,
+        wej.customer_rate,
+        wej.customer_total,
+        wej.wage_rate,
+        wej.wage_total
+      FROM work_entries we
+      LEFT JOIN workers wk
+        ON wk.id = we.worker_id AND wk.company_id = we.company_id
+      LEFT JOIN work_entry_jobs wej
+        ON wej.work_entry_id = we.id
+      LEFT JOIN jobs j
+        ON j.id = wej.job_id
+      WHERE we.company_id = $1
+      ${whereSql}
+      ORDER BY we.work_date DESC, we.id DESC, wej.id ASC
+      `,
+      params
+    );
+
+    const rows = r.rows || [];
+
+    const headers = [
+      "Work Date",
+      "Job No1",
+      "Job No2",
+      "Worker Code",
+      "Worker Name",
+      "Job Code",
+      "Job Type",
+      "Hours",
+      "Fees Collected",
+      "Pay Type",
+    ];
+
+    if (canSeeRates) {
+      headers.push("Customer Rate", "Customer Total", "Wage Rate", "Wage Total");
+    }
+
+    headers.push("Note");
+
+    const body = rows.map((x) => {
+      const base = [
+        x.work_date || "",
+        x.job_no1 || "",
+        x.job_no2 || "",
+        x.worker_code || "",
+        x.worker_name || "",
+        x.job_code || "",
+        x.job_type || "",
+        x.hours ?? "",
+        x.fees_collected ?? "",
+        Number(x.is_bank) === 1 ? "Bank" : "Cash",
+      ];
+
+      if (canSeeRates) {
+        base.push(x.customer_rate ?? "", x.customer_total ?? "", x.wage_rate ?? "", x.wage_total ?? "");
+      }
+
+      base.push(x.note || "");
+
+      return base.map(csvEscape).join(",");
+    });
+
+    const csv = "\ufeff" + headers.map(csvEscape).join(",") + "\n" + body.join("\n") + "\n";
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="work_entries_export.csv"`);
+    return res.send(csv);
+  } catch (err) {
+    console.error("work-entries export error:", err);
+    return res.status(500).send("Failed to export records");
   }
 });
 

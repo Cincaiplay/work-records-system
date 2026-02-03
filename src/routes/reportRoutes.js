@@ -1,4 +1,4 @@
-// src/routes/reportRoutes.js
+﻿// src/routes/reportRoutes.js
 import express from "express";
 import PDFDocument from "pdfkit";
 import db from "../config/db.js";
@@ -57,6 +57,18 @@ function resolveJobNoFilter(req) {
   if (!j1 && j2) return "HAS_JOBNO2";
   if (j1 && !j2) return "NO_JOBNO2";
   return "ALL";
+}
+
+function resolveLang(req) {
+  const raw = String(req.query.lang || "").toLowerCase();
+  if (raw === "zh" || raw === "zh-cn" || raw === "zh-hans" || raw === "cn" || raw === "mandarin") {
+    return "zh";
+  }
+  return "en";
+}
+
+function t(lang, en, zh) {
+  return lang === "zh" ? zh : en;
 }
 
 function jobNoWhereSql(jobNoFilter) {
@@ -132,27 +144,6 @@ function jobsLeftJoinSql() {
   `;
 }
 
-async function getWorkerById({ companyId, workerId }) {
-  try {
-    const r = await db.query(
-      `
-      SELECT
-        id,
-        worker_code,
-        COALESCE(worker_name, worker_english_name, '') AS worker_name
-      FROM workers
-      WHERE id = $1 AND company_id = $2
-      `,
-      [workerId, companyId]
-    );
-
-    return r.rows?.[0] || null;
-  } catch (err) {
-    console.error("getWorkerById error:", err);
-    return null;
-  }
-}
-
 
 function monthTitleFromRange(start, end) {
   // If range spans multiple months, still show end month like Access printouts commonly do.
@@ -174,12 +165,77 @@ function monthTitleFromRange(start, end) {
   return `${map[m] || m} 月份工资结单`;
 }
 
+function monthTitleFromRangeEn(start, end) {
+  const m = String(end || start || "").slice(5, 7);
+  const y = String(end || start || "").slice(0, 4);
+  const map = {
+    "01": "January",
+    "02": "February",
+    "03": "March",
+    "04": "April",
+    "05": "May",
+    "06": "June",
+    "07": "July",
+    "08": "August",
+    "09": "September",
+    "10": "October",
+    "11": "November",
+    "12": "December",
+  };
+  const month = map[m] || m;
+  const year = y || "";
+  return `${month} ${year} Payslip`.trim();
+}
+
 function isoKey(v) {
   if (!v) return "";
   if (v instanceof Date) return v.toISOString().slice(0, 10); // YYYY-MM-DD
   const s = String(v);
   if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
   return s;
+}
+
+async function getWorkerByIdPg({ companyId, workerId }) {
+  try {
+    const r = await db.query(
+      `SELECT id, worker_code,
+              COALESCE(worker_name, worker_english_name, '') AS worker_name
+       FROM workers
+       WHERE id = $1 AND company_id = $2`,
+      [workerId, companyId]
+    );
+    return r.rows?.[0] || null;
+  } catch {
+    return null;
+  }
+}
+
+function parseWorkerIdsFromQuery(req) {
+  // Accept:
+  // - workerId=3
+  // - workerIds=1,2,3
+  // - workerIds[]=1&workerIds[]=2 (optional)
+  const one = String(req.query.workerId || "").trim();
+  const listRaw =
+    req.query.workerIds ??
+    req.query["workerIds[]"] ??
+    (one ? one : "");
+
+  const arr = Array.isArray(listRaw) ? listRaw : String(listRaw).split(",");
+  const ids = arr
+    .map((x) => Number(String(x).trim()))
+    .filter((n) => Number.isFinite(n) && n > 0);
+
+  // de-dupe keep order
+  const out = [];
+  const seen = new Set();
+  for (const id of ids) {
+    if (!seen.has(id)) {
+      seen.add(id);
+      out.push(id);
+    }
+  }
+  return out;
 }
 
 
@@ -239,6 +295,7 @@ router.get("/worker-monthly-pays", async (req, res) => {
     const companyId = Number(req.query.companyId || 1);
     const start = req.query.start;
     const end = req.query.end;
+    const lang = resolveLang(req);
 
     const { canFilterPayType, payFilter } = await resolvePayFilter(req);
     const jobNoFilter = resolveJobNoFilter(req);
@@ -273,6 +330,7 @@ router.get("/worker-monthly-pays/pdf", async (req, res) => {
     const companyId = Number(req.query.companyId || 1);
     const start = req.query.start;
     const end = req.query.end;
+    const lang = resolveLang(req);
 
     const showVouchers = String(req.query.showVouchers || "") === "1";
     const { payFilter } = await resolvePayFilter(req);
@@ -288,14 +346,15 @@ router.get("/worker-monthly-pays/pdf", async (req, res) => {
     try {
       const r = await db.query("SELECT name FROM companies WHERE id = $1", [companyId]);
       companyName = String(r.rows?.[0]?.name || "").trim();
-    } catch (e) {
+    } catch {
       companyName = "";
     }
 
-    // ✅ PostgreSQL: queryWorkerMonthlyPays must be the Postgres version (db.query + $1..)
+    // ✅ PostgreSQL: queryWorkerMonthlyPays must be Postgres version (db.query + $1..)
     const rows = await queryWorkerMonthlyPays({ companyId, start, end, payFilter, jobNoFilter });
 
-    const filename = `Worker_Monthly_Pays_${companyName || companyId}_${start}_to_${end}.pdf`;
+    const safeName = (companyName || String(companyId)).replace(/[^\w.-]+/g, "_");
+    const filename = `Worker_Monthly_Pays_${safeName}_${start}_to_${end}.pdf`;
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
 
@@ -308,50 +367,94 @@ router.get("/worker-monthly-pays/pdf", async (req, res) => {
 
     const fmt2 = (v) => num(v).toFixed(2);
 
-    /* ================= Header ================= */
-    doc.fontSize(16).text("Worker Monthly Pays 工资结单", { align: "center" });
-    doc.moveDown(0.35);
+    /* ================= Header (function so we can re-draw on new pages) ================= */
+    function drawReportTitle() {
+      doc
+        .font("NotoSC")
+        .fontSize(16)
+        .fillColor("#000")
+        .text(t(lang, "Worker Monthly Pays", "技师工资结单"), { align: "center" });
+      doc.moveDown(0.35);
 
-    doc
-      .fontSize(10)
-      .fillColor("#555")
-      .text(
-        `${companyName ? `Company: ${companyName}` : `Company ID: ${companyId}`}    Date: ${formatDMY(
-          start
-        )} - ${formatDMY(end)}`,
-        { align: "center" }
-      );
-    doc.fillColor("#000");
-    doc.moveDown(1);
+      doc
+        .font("NotoSC")
+        .fontSize(10)
+        .fillColor("#555")
+        .text(
+          t(
+            lang,
+            `${companyName ? `Company: ${companyName}` : `Company ID: ${companyId}`}    Date: ${formatDMY(
+              start
+            )} - ${formatDMY(end)}`,
+            `${companyName ? `公司: ${companyName}` : `公司编号: ${companyId}`}    日期: ${formatDMY(
+              start
+            )} - ${formatDMY(end)}`
+          ),
+          { align: "center" }
+        );
 
-    /* ================= Table layout ================= */
+      doc.fillColor("#000");
+      doc.moveDown(1);
+    }
+
+    drawReportTitle();
+
+    /* ================= Table layout (AUTO RESIZE COLUMNS) ================= */
     const pageW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
     const x0 = doc.page.margins.left;
     let y = doc.y;
     const rowH = 16;
 
-    let col = showVouchers
-      ? { code: 70, name: 160, hours: 60, cust: 90, wage: 80, cash: 90, bank: 110, v1: 60, v2: 60 }
-      : { code: 75, name: 190, hours: 60, cust: 95, wage: 85, cash: 95, bank: 120 };
+    // ✅ Columns that are actually used
+    const cols = [
+      { key: "code", label: t(lang, "Code", "工号"), w: 70, align: "left" },
+      { key: "name", label: t(lang, "Name", "技师名"), w: 210, align: "left" },
+      { key: "hours", label: t(lang, "Hours", "钟点"), w: 60, align: "right" },
+      { key: "cust", label: t(lang, "Fees", "收费"), w: 80, align: "right" },
+      { key: "wage", label: t(lang, "Wages", "工资"), w: 80, align: "right" },
 
-    const sumW = Object.values(col).reduce((s, w) => s + w, 0);
-    if (sumW > pageW) {
-      const scale = pageW / sumW;
-      Object.keys(col).forEach((k) => {
-        col[k] = Math.max(22, Math.floor(col[k] * scale));
-      });
+      // =========================================================
+      // OPTIONAL COLUMNS (manual)
+      // 👉 If you want them back, just uncomment these lines,
+      // AND also uncomment the values/totals further below.
+      // =========================================================
+      // { key: "cash", label: "现金出工钱", w: 85, align: "right" },
+      // { key: "bank", label: "支票/转账工钱", w: 95, align: "right" },
+
+      // ✅ OPTIONAL vouchers (auto by showVouchers=1)
+      ...(showVouchers
+        ? [
+            { key: "v1", label: t(lang, "Voucher 1", "支票1"), w: 55, align: "right" },
+            { key: "v2", label: t(lang, "Voucher 2 (Misc.)", "支票2杂费"), w: 70, align: "right" },
+          ]
+        : []),
+    ];
+
+    function fitColumnsToPage(colsArr, maxW) {
+      const minW = 38; // don’t let anything get too tiny
+      const total = colsArr.reduce((s, c) => s + c.w, 0);
+
+      // If too wide -> scale down
+      if (total > maxW) {
+        const scale = maxW / total;
+        colsArr.forEach((c) => (c.w = Math.max(minW, Math.floor(c.w * scale))));
+      }
+
+      // Put leftover/shortage into the Name column
+      let sum2 = colsArr.reduce((s, c) => s + c.w, 0);
+      const diff = maxW - sum2;
+
+      const nameCol = colsArr.find((c) => c.key === "name") || colsArr[0];
+      nameCol.w = Math.max(minW, nameCol.w + diff);
+
+      // Final guard (rounding)
+      sum2 = colsArr.reduce((s, c) => s + c.w, 0);
+      if (sum2 > maxW) nameCol.w -= sum2 - maxW;
     }
-    const diff = pageW - Object.values(col).reduce((s, w) => s + w, 0);
-    col.name += diff;
+
+    fitColumnsToPage(cols, pageW);
 
     const bottomLimit = () => doc.page.height - doc.page.margins.bottom - 30;
-    const ensureRow = () => {
-      if (y + rowH > bottomLimit()) {
-        doc.addPage();
-        y = doc.page.margins.top;
-        drawHeader();
-      }
-    };
 
     const drawCell = ({ text, x, y0, w, align = "left", bg = null, fontSize = 9 }) => {
       if (bg) {
@@ -359,12 +462,13 @@ router.get("/worker-monthly-pays/pdf", async (req, res) => {
         doc.rect(x, y0, w, rowH).fill(bg);
         doc.restore();
       }
+
       doc.save();
       doc.lineWidth(0.6).strokeColor("#999");
       doc.rect(x, y0, w, rowH).stroke();
       doc.restore();
 
-      doc.font("NotoSC").fontSize(fontSize);
+      doc.font("NotoSC").fontSize(fontSize).fillColor("#000");
       doc.text(String(text ?? ""), x + 4, y0 + 3, { width: w - 8, align, ellipsis: true });
     };
 
@@ -373,26 +477,43 @@ router.get("/worker-monthly-pays/pdf", async (req, res) => {
       const hf = 8;
       let x = x0;
 
-      drawCell({ text: "工号", x, y0: y, w: col.code, align: "center", bg, fontSize: hf }); x += col.code;
-      drawCell({ text: "技师名", x, y0: y, w: col.name, align: "center", bg, fontSize: hf }); x += col.name;
-      drawCell({ text: "钟点", x, y0: y, w: col.hours, align: "center", bg, fontSize: hf }); x += col.hours;
-      drawCell({ text: "收费", x, y0: y, w: col.cust, align: "center", bg, fontSize: hf }); x += col.cust;
-      drawCell({ text: "总工钱", x, y0: y, w: col.wage, align: "center", bg, fontSize: hf }); x += col.wage;
-      drawCell({ text: "现金出工钱", x, y0: y, w: col.cash, align: "center", bg, fontSize: hf }); x += col.cash;
-      drawCell({ text: "支票/转账工钱", x, y0: y, w: col.bank, align: "center", bg, fontSize: hf }); x += col.bank;
-
-      if (showVouchers) {
-        drawCell({ text: "支票1", x, y0: y, w: col.v1, align: "center", bg, fontSize: hf }); x += col.v1;
-        drawCell({ text: "支票2报杂费", x, y0: y, w: col.v2, align: "center", bg, fontSize: hf });
-      }
+      cols.forEach((c) => {
+        drawCell({ text: c.label, x, y0: y, w: c.w, align: "center", bg, fontSize: hf });
+        x += c.w;
+      });
 
       y += rowH;
+    };
+
+    const ensureRow = () => {
+      if (y + rowH > bottomLimit()) {
+        doc.addPage();
+        y = doc.page.margins.top;
+
+        // ✅ re-draw title on each new page
+        drawReportTitle();
+        y = doc.y;
+
+        drawHeader();
+      }
     };
 
     drawHeader();
 
     /* ================= Rows ================= */
-    let totalHours = 0, totalCustomer = 0, totalWage = 0, totalCash = 0, totalBank = 0, totalV1 = 0, totalV2 = 0;
+    let totalHours = 0,
+      totalCustomer = 0,
+      totalWage = 0;
+
+    // =========================================================
+    // OPTIONAL TOTALS (manual)
+    // 👉 If you want cash/bank back, uncomment these.
+    // =========================================================
+    // let totalCash = 0, totalBank = 0;
+
+    // ✅ vouchers totals (auto)
+    let totalV1 = 0,
+      totalV2 = 0;
 
     rows.forEach((r) => {
       ensureRow();
@@ -400,28 +521,50 @@ router.get("/worker-monthly-pays/pdf", async (req, res) => {
       const h = num(r.total_hours);
       const c = num(r.total_customer);
       const w = num(r.total_wage);
-      const cash = num(r.cash_wage);
-      const bank = num(r.bank_wage);
+
+      totalHours += h;
+      totalCustomer += c;
+      totalWage += w;
+
+      // =========================================================
+      // OPTIONAL VALUES (manual)
+      // 👉 If you want cash/bank back, uncomment these + the cols.
+      // =========================================================
+      // const cash = num(r.cash_wage);
+      // const bank = num(r.bank_wage);
+      // totalCash += cash;
+      // totalBank += bank;
+
+      // ✅ vouchers (auto by showVouchers)
       const v1 = showVouchers ? num(r.voucher1_wage) : 0;
       const v2 = showVouchers ? num(r.voucher2_wage) : 0;
+      if (showVouchers) {
+        totalV1 += v1;
+        totalV2 += v2;
+      }
 
-      totalHours += h; totalCustomer += c; totalWage += w;
-      totalCash += cash; totalBank += bank;
-      totalV1 += v1; totalV2 += v2;
+      const values = {
+        code: r.worker_code || "-",
+        name: r.worker_name || "-",
+        hours: fmt2(h),
+        cust: fmt2(c),
+        wage: fmt2(w),
+
+        // =========================================================
+        // OPTIONAL VALUES (manual)
+        // 👉 If you want them back, uncomment these.
+        // =========================================================
+        // cash: fmt2(cash),
+        // bank: fmt2(bank),
+
+        ...(showVouchers ? { v1: fmt2(v1), v2: fmt2(v2) } : {}),
+      };
 
       let x = x0;
-      drawCell({ text: r.worker_code || "-", x, y0: y, w: col.code }); x += col.code;
-      drawCell({ text: r.worker_name || "-", x, y0: y, w: col.name }); x += col.name;
-      drawCell({ text: fmt2(h), x, y0: y, w: col.hours, align: "right" }); x += col.hours;
-      drawCell({ text: fmt2(c), x, y0: y, w: col.cust, align: "right" }); x += col.cust;
-      drawCell({ text: fmt2(w), x, y0: y, w: col.wage, align: "right" }); x += col.wage;
-      drawCell({ text: fmt2(cash), x, y0: y, w: col.cash, align: "right" }); x += col.cash;
-      drawCell({ text: fmt2(bank), x, y0: y, w: col.bank, align: "right" }); x += col.bank;
-
-      if (showVouchers) {
-        drawCell({ text: fmt2(v1), x, y0: y, w: col.v1, align: "right" }); x += col.v1;
-        drawCell({ text: fmt2(v2), x, y0: y, w: col.v2, align: "right" });
-      }
+      cols.forEach((col) => {
+        drawCell({ text: values[col.key] ?? "", x, y0: y, w: col.w, align: col.align });
+        x += col.w;
+      });
 
       y += rowH;
     });
@@ -429,19 +572,47 @@ router.get("/worker-monthly-pays/pdf", async (req, res) => {
     /* ================= Total row ================= */
     ensureRow();
     const bg = "#FFF3CD";
+
+    const valuesTotal = {
+      code: t(lang, "TOTAL", "本月份总数"),
+      name: "",
+      hours: fmt2(totalHours),
+      cust: fmt2(totalCustomer),
+      wage: fmt2(totalWage),
+
+      // =========================================================
+      // OPTIONAL TOTALS (manual)
+      // 👉 If you want cash/bank back, uncomment these.
+      // =========================================================
+      // cash: fmt2(totalCash),
+      // bank: fmt2(totalBank),
+
+      ...(showVouchers ? { v1: fmt2(totalV1), v2: fmt2(totalV2) } : {}),
+    };
+
     let x = x0;
+    cols.forEach((col, idx) => {
+      // Merge Code + Name for the total label
+      if (idx === 0) {
+        const wMerge = cols[0].w + (cols[1]?.w || 0);
+        drawCell({ text: valuesTotal.code, x, y0: y, w: wMerge, bg, align: "left" });
+        x += wMerge;
+        return;
+      }
+      if (idx === 1) return; // skip name (merged)
 
-    drawCell({ text: "本月份总数", x, y0: y, w: col.code + col.name, bg }); x += col.code + col.name;
-    drawCell({ text: fmt2(totalHours), x, y0: y, w: col.hours, align: "right", bg }); x += col.hours;
-    drawCell({ text: fmt2(totalCustomer), x, y0: y, w: col.cust, align: "right", bg }); x += col.cust;
-    drawCell({ text: fmt2(totalWage), x, y0: y, w: col.wage, align: "right", bg }); x += col.wage;
-    drawCell({ text: fmt2(totalCash), x, y0: y, w: col.cash, align: "right", bg }); x += col.cash;
-    drawCell({ text: fmt2(totalBank), x, y0: y, w: col.bank, align: "right", bg }); x += col.bank;
+      drawCell({
+        text: valuesTotal[col.key] ?? "",
+        x,
+        y0: y,
+        w: col.w,
+        bg,
+        align: col.align,
+      });
+      x += col.w;
+    });
 
-    if (showVouchers) {
-      drawCell({ text: fmt2(totalV1), x, y0: y, w: col.v1, align: "right", bg }); x += col.v1;
-      drawCell({ text: fmt2(totalV2), x, y0: y, w: col.v2, align: "right", bg });
-    }
+    y += rowH;
 
     doc.end();
   } catch (err) {
@@ -449,6 +620,7 @@ router.get("/worker-monthly-pays/pdf", async (req, res) => {
     res.status(500).send("Failed to generate PDF");
   }
 });
+
 
 
 /* -----------------------------
@@ -543,6 +715,7 @@ router.get("/sales-listing/pdf", async (req, res) => {
     const companyId = Number(req.query.companyId || 1);
     const start = req.query.start;
     const end = req.query.end;
+    const lang = resolveLang(req);
 
     const { payFilter } = await resolvePayFilter(req);
     const jobNoFilter = resolveJobNoFilter(req);
@@ -553,7 +726,17 @@ router.get("/sales-listing/pdf", async (req, res) => {
 
     const { rows, days } = await querySalesListing({ companyId, start, end, payFilter, jobNoFilter });
 
-    const filename = `Daily_Sales_Report_${companyId}_${start}_to_${end}.pdf`;
+    // ✅ Company name (dynamic title)
+    let companyName = "";
+    try {
+      const c = await db.query(`SELECT name FROM companies WHERE id = $1`, [companyId]);
+      companyName = String(c.rows?.[0]?.name || "").trim();
+    } catch {
+      companyName = "";
+    }
+    const companyTitle = (companyName || "DEFAULT COMPANY").toUpperCase();
+
+    const filename = `DailySalesReport_${companyTitle}_${start}to${end}.pdf`;
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
 
@@ -565,11 +748,16 @@ router.get("/sales-listing/pdf", async (req, res) => {
     doc.font("NotoSC");
 
     // ===== Title =====
-    doc.fontSize(14).text("TWIN REFLEXOLOGY HEALING SDN BHD", { align: "center" });
+    doc.fontSize(14).text(companyTitle, { align: "center" });   // ✅ changed
     doc.moveDown(0.2);
-    doc.fontSize(12).text("Daily Sales Report 每天生意记录", { align: "center" });
+    doc.fontSize(12).text(t(lang, "Daily Sales Report", "每天生意记录"), { align: "center" });
     doc.moveDown(0.4);
-    doc.fontSize(10).fillColor("#555").text(`Date: ${formatDMY(start)} - ${formatDMY(end)}`, { align: "center" });
+    doc
+      .fontSize(10)
+      .fillColor("#555")
+      .text(t(lang, `Date: ${formatDMY(start)} - ${formatDMY(end)}`, `日期: ${formatDMY(start)} - ${formatDMY(end)}`), {
+        align: "center",
+      });
     doc.fillColor("#000");
     doc.moveDown(1);
 
@@ -597,11 +785,11 @@ router.get("/sales-listing/pdf", async (req, res) => {
 
       doc.font("NotoSC").fontSize(9).fillColor("#000");
       let x = startX;
-      doc.text("Date日期", x, y, { width: col.date }); x += col.date;
-      doc.text("Bill No单号", x, y, { width: col.bill }); x += col.bill;
-      doc.text("Job Descriptions项目", x, y, { width: col.job }); x += col.job;
-      doc.text("Hour钟点", x, y, { width: col.hours, align: "right" }); x += col.hours;
-      doc.text("Fee收费", x, y, { width: col.fee, align: "right" });
+      doc.text(t(lang, "Date", "日期"), x, y, { width: col.date }); x += col.date;
+      doc.text(t(lang, "Bill No", "单号"), x, y, { width: col.bill }); x += col.bill;
+      doc.text(t(lang, "Job Description", "项目"), x, y, { width: col.job }); x += col.job;
+      doc.text(t(lang, "Hours", "钟点"), x, y, { width: col.hours, align: "right" }); x += col.hours;
+      doc.text(t(lang, "Fee", "收费"), x, y, { width: col.fee, align: "right" });
       y += rowH;
     };
 
@@ -609,7 +797,7 @@ router.get("/sales-listing/pdf", async (req, res) => {
       if (y > doc.page.height - doc.page.margins.bottom - need) {
         doc.addPage();
         y = doc.page.margins.top;
-        drawHeader(); // re-draw header on new page
+        drawHeader();
       }
     };
 
@@ -653,7 +841,11 @@ router.get("/sales-listing/pdf", async (req, res) => {
 
     ensureSpace(30);
     doc.moveDown(0.5);
-    doc.font("NotoSC").fontSize(10).fillColor("#000").text(`Grand Total: ${fmt2(grand)}`, { align: "right" });
+    doc
+      .font("NotoSC")
+      .fontSize(10)
+      .fillColor("#000")
+      .text(t(lang, `Grand Total: ${fmt2(grand)}`, `总计: ${fmt2(grand)}`), { align: "right" });
 
     doc.end();
   } catch (err) {
@@ -662,13 +854,24 @@ router.get("/sales-listing/pdf", async (req, res) => {
   }
 });
 
+
 // =============================
 // Worker Job Listing (Postgres) + PDF 
 // =============================
 
-async function queryWorkerJobListing({ companyId, start, end, payFilter, jobNoFilter }) {
+async function queryWorkerJobListing({ companyId, start, end, payFilter, jobNoFilter, workerIds }) {
   const paySql = payWhereSql(payFilter);           // must use alias "we"
   const jobNoSql = jobNoWhereSql(jobNoFilter);     // must use alias "we"
+
+  const ids = Array.isArray(workerIds)
+    ? workerIds.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0)
+    : [];
+
+  const params = [companyId, start, end];
+  const workerSql = ids.length
+    ? `AND we.worker_id IN (${ids.map((_, i) => `$${params.length + i + 1}`).join(",")})`
+    : "";
+  if (ids.length) params.push(...ids);
 
   const sql = `
     SELECT
@@ -692,6 +895,7 @@ async function queryWorkerJobListing({ companyId, start, end, payFilter, jobNoFi
       AND we.work_date::date <= $3::date
       ${paySql}
       ${jobNoSql}
+      ${workerSql}
     ORDER BY
       NULLIF(regexp_replace(COALESCE(w.worker_code,''), '\\D', '', 'g'), '')::int NULLS LAST,
       w.worker_code,
@@ -702,7 +906,7 @@ async function queryWorkerJobListing({ companyId, start, end, payFilter, jobNoFi
       COALESCE(j.job_type,'')
   `;
 
-  const r = await db.query(sql, [companyId, start, end]);
+  const r = await db.query(sql, params);
   return r.rows || [];
 }
 
@@ -714,13 +918,16 @@ router.get("/account-worker-job-listing", async (req, res) => {
 
     const { canFilterPayType, payFilter } = await resolvePayFilter(req);
     const jobNoFilter = resolveJobNoFilter(req);
+    const workerIds = parseWorkerIdsFromQuery(req);
 
     if (!companyId || companyId <= 0) return res.status(400).json({ error: "Invalid companyId" });
     if (!isValidISODate(start) || !isValidISODate(end))
       return res.status(400).json({ error: "Invalid start/end date (use YYYY-MM-DD)" });
     if (start > end) return res.status(400).json({ error: "Start date cannot be after end date" });
 
-    const rows = await queryWorkerJobListing({ companyId, start, end, payFilter, jobNoFilter });
+    const rows = await queryWorkerJobListing({ companyId, start, end, payFilter, jobNoFilter, workerIds });
+
+    
 
     const map = new Map();
     (rows || []).forEach((r) => {
@@ -768,15 +975,27 @@ router.get("/account-worker-job-listing/pdf", async (req, res) => {
     const companyId = Number(req.query.companyId || 1);
     const start = req.query.start;
     const end = req.query.end;
+    const lang = resolveLang(req);
 
     const { payFilter } = await resolvePayFilter(req);
     const jobNoFilter = resolveJobNoFilter(req);
+    const workerIds = parseWorkerIdsFromQuery(req);
 
     if (!companyId || companyId <= 0) return res.status(400).send("Invalid companyId");
     if (!isValidISODate(start) || !isValidISODate(end)) return res.status(400).send("Invalid start/end date");
     if (start > end) return res.status(400).send("Start date cannot be after end date");
 
-    const rows = await queryWorkerJobListing({ companyId, start, end, payFilter, jobNoFilter });
+    const rows = await queryWorkerJobListing({ companyId, start, end, payFilter, jobNoFilter, workerIds });
+
+    // ✅ Company name (dynamic title)
+    let companyName = "";
+    try {
+      const c = await db.query(`SELECT name FROM companies WHERE id = $1`, [companyId]);
+      companyName = String(c.rows?.[0]?.name || "").trim();
+    } catch {
+      companyName = "";
+    }
+    const companyTitle = (companyName || "DEFAULT COMPANY").toUpperCase();
 
     // group by worker (keep SQL order)
     const workers = [];
@@ -815,7 +1034,7 @@ router.get("/account-worker-job-listing/pdf", async (req, res) => {
       });
     });
 
-    const filename = `Worker_Job_Listing_${companyId}_${start}_to_${end}.pdf`;
+    const filename = `WorkerJobListing_${companyTitle}_${start}to${end}.pdf`;
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="${filename}"`);
 
@@ -829,12 +1048,23 @@ router.get("/account-worker-job-listing/pdf", async (req, res) => {
     const fmt2 = (v) => num(v).toFixed(2);
 
     const drawReportTitle = () => {
-      doc.font("NotoSC").fontSize(14).fillColor("#000").text("Worker Job Listing 技师工作记录", { align: "center" });
+      doc
+        .font("NotoSC")
+        .fontSize(14)
+        .fillColor("#000")
+        .text(t(lang, "Worker Job Listing", "技师工作记录"), { align: "center" });
       doc.moveDown(0.2);
       doc
         .fontSize(10)
         .fillColor("#555")
-        .text(`Company ID: ${companyId}    Date: ${formatDMY(start)} - ${formatDMY(end)}`, { align: "center" });
+        .text(
+          t(
+            lang,
+            `Company Name: ${companyTitle}    Date: ${formatDMY(start)} - ${formatDMY(end)}`,
+            `公司: ${companyTitle}    日期: ${formatDMY(start)} - ${formatDMY(end)}`
+          ),
+          { align: "center" }
+        );
       doc.fillColor("#000");
       doc.moveDown(0.8);
     };
@@ -855,12 +1085,12 @@ router.get("/account-worker-job-listing/pdf", async (req, res) => {
 
       doc.font("NotoSC").fontSize(fontSize).fillColor("#000");
       let x = x0;
-      doc.text("日期", x, y, { width: col.date }); x += col.date;
-      doc.text("单号", x, y, { width: col.bill }); x += col.bill;
-      doc.text("工作项目", x, y, { width: col.job }); x += col.job;
-      doc.text("钟点", x, y, { width: col.hours, align: "right" }); x += col.hours;
-      doc.text("收费", x, y, { width: col.fee, align: "right" }); x += col.fee;
-      doc.text("工资", x, y, { width: col.wage, align: "right" });
+      doc.text(t(lang, "Date", "日期"), x, y, { width: col.date }); x += col.date;
+      doc.text(t(lang, "Bill No", "单号"), x, y, { width: col.bill }); x += col.bill;
+      doc.text(t(lang, "Job", "项目"), x, y, { width: col.job }); x += col.job;
+      doc.text(t(lang, "Hours", "钟点"), x, y, { width: col.hours, align: "right" }); x += col.hours;
+      doc.text(t(lang, "Fees", "收费"), x, y, { width: col.fee, align: "right" }); x += col.fee;
+      doc.text(t(lang, "Wages", "工资"), x, y, { width: col.wage, align: "right" });
 
       return y + rowH;
     };
@@ -889,7 +1119,11 @@ router.get("/account-worker-job-listing/pdf", async (req, res) => {
       const xWage = xFee + col.fee;
 
       doc.text(
-        `From ${formatDMY(start)} till ${formatDMY(end)}   ${w.worker_name || ""} 工资次数额`,
+        t(
+          lang,
+          `From ${formatDMY(start)} till ${formatDMY(end)}   ${w.worker_name || ""} wages total`,
+          `${formatDMY(start)} 至 ${formatDMY(end)}   ${w.worker_name || ""} 工资总额`
+        ),
         xText,
         y,
         { width: leftW, align: "left", ellipsis: true }
@@ -954,7 +1188,7 @@ router.get("/account-worker-job-listing/pdf", async (req, res) => {
       // If truncated, show note
       if (list.length > showList.length) {
         doc.font("NotoSC").fontSize(8).fillColor("#B00000");
-        doc.text(`(More rows not shown: ${list.length - showList.length})`, x0, y + 2, {
+        doc.text(t(lang, `(More rows not shown: ${list.length - showList.length})`, `（未显示行数：${list.length - showList.length}）`), x0, y + 2, {
           width: pageW,
           align: "left",
         });
@@ -1095,6 +1329,7 @@ router.get("/monthly-summary/pdf", async (req, res) => {
     const companyId = Number(req.query.companyId || 1);
     const start = req.query.start;
     const end = req.query.end;
+    const lang = resolveLang(req);
 
     const { payFilter } = await resolvePayFilter(req);
     const jobNoFilter = resolveJobNoFilter(req);
@@ -1172,14 +1407,23 @@ router.get("/monthly-summary/pdf", async (req, res) => {
     doc.font("NotoSC");
 
     // ===== Title =====
-    doc.fontSize(16).text(`${companyName || "Company"} - MONTHLY REPORTS`, { align: "center" });
+    doc
+      .fontSize(16)
+      .text(t(lang, `${companyName || "Company"} - Monthly Summary`, `${companyName || "公司"} - 月结`), {
+        align: "center",
+      });
     doc.moveDown(0.4);
     doc
       .fontSize(10)
       .fillColor("#555")
-      .text(`Company ID: ${companyId}    Date: ${formatDMY(start)} - ${formatDMY(end)}`, {
-        align: "center",
-      });
+      .text(
+        t(
+          lang,
+          `Company ID: ${companyId}    Date: ${formatDMY(start)} - ${formatDMY(end)}`,
+          `公司编号: ${companyId}    日期: ${formatDMY(start)} - ${formatDMY(end)}`
+        ),
+        { align: "center" }
+      );
     doc.fillColor("#000");
     doc.moveDown(1);
 
@@ -1197,10 +1441,6 @@ router.get("/monthly-summary/pdf", async (req, res) => {
       bankWage: 72,
       cashWage: 72,
       totalWage: 78,
-      hours: 58,
-      feeRate: 60,
-      wageRate: 60,
-      pct: 46,
     };
 
     const totalW = Object.values(col).reduce((s, n) => s + n, 0);
@@ -1236,19 +1476,15 @@ router.get("/monthly-summary/pdf", async (req, res) => {
 
       doc.fontSize(9).fillColor("#000");
       let x = x0;
-      doc.text("月份", x, y, { width: col.month }); x += col.month;
-      doc.text("银行户口", x, y, { width: col.bankFee, align: "right" }); x += col.bankFee;
-      doc.text("现金户口", x, y, { width: col.cashFee, align: "right" }); x += col.cashFee;
-      doc.text("总收费", x, y, { width: col.totalFee, align: "right" }); x += col.totalFee;
+      doc.text(t(lang, "Month", "月份"), x, y, { width: col.month }); x += col.month;
+      doc.text(t(lang, "Bank Fees", "银行户口"), x, y, { width: col.bankFee, align: "right" }); x += col.bankFee;
+      doc.text(t(lang, "Cash Fees", "现金户口"), x, y, { width: col.cashFee, align: "right" }); x += col.cashFee;
+      doc.text(t(lang, "Total Fees", "总收费"), x, y, { width: col.totalFee, align: "right" }); x += col.totalFee;
 
-      doc.text("银行工资", x, y, { width: col.bankWage, align: "right" }); x += col.bankWage;
-      doc.text("现金工资", x, y, { width: col.cashWage, align: "right" }); x += col.cashWage;
-      doc.text("总工资", x, y, { width: col.totalWage, align: "right" }); x += col.totalWage;
+      doc.text(t(lang, "Bank Wages", "银行工资"), x, y, { width: col.bankWage, align: "right" }); x += col.bankWage;
+      doc.text(t(lang, "Cash Wages", "现金工资"), x, y, { width: col.cashWage, align: "right" }); x += col.cashWage;
+      doc.text(t(lang, "Total Wages", "总工资"), x, y, { width: col.totalWage, align: "right" }); x += col.totalWage;
 
-      doc.text("总钟点", x, y, { width: col.hours, align: "right" }); x += col.hours;
-      doc.text("收费钟价", x, y, { width: col.feeRate, align: "right" }); x += col.feeRate;
-      doc.text("工资钟价", x, y, { width: col.wageRate, align: "right" }); x += col.wageRate;
-      doc.text("%", x, y, { width: col.pct, align: "right" });
 
       y += rowH;
     };
@@ -1273,7 +1509,7 @@ router.get("/monthly-summary/pdf", async (req, res) => {
       doc.fontSize(9).fillColor("#000");
       let x = x0;
 
-      doc.text(isTotal ? "TOTAL 总数" : monthLabel(r.ym), x, y, { width: col.month }); x += col.month;
+      doc.text(isTotal ? t(lang, "TOTAL", "总数") : monthLabel(r.ym), x, y, { width: col.month }); x += col.month;
 
       doc.fillColor(isTotal ? "#B00000" : "#C00000");
       doc.text(fmt2(r.bank_fee), x, y, { width: col.bankFee, align: "right" }); x += col.bankFee;
@@ -1292,16 +1528,6 @@ router.get("/monthly-summary/pdf", async (req, res) => {
 
       doc.fillColor("#000");
       doc.text(fmt2(r.total_wage), x, y, { width: col.totalWage, align: "right" }); x += col.totalWage;
-
-      doc.fillColor("#A05000");
-      doc.text(fmt2(r.total_hours), x, y, { width: col.hours, align: "right" }); x += col.hours;
-
-      doc.fillColor("#A05000");
-      doc.text(fmt2(r.fee_rate), x, y, { width: col.feeRate, align: "right" }); x += col.feeRate;
-      doc.text(fmt2(r.wage_rate), x, y, { width: col.wageRate, align: "right" }); x += col.wageRate;
-
-      doc.fillColor("#1E5AA8");
-      doc.text(fmt2(r.pct), x, y, { width: col.pct, align: "right" });
 
       doc.fillColor("#000");
       y += rowH;
@@ -1323,42 +1549,6 @@ router.get("/monthly-summary/pdf", async (req, res) => {
 // =============================
 // Worker Payslip (Postgres) + PDFs
 // =============================
-
-async function queryWorkerPayslipLines({ companyId, workerId, start, end, payFilter, jobNoFilter }) {
-  const paySql = payWhereSql(payFilter);         // uses alias we
-  const jobNoSql = jobNoWhereSql(jobNoFilter);   // uses alias we
-
-  const sql = `
-    SELECT
-      we.work_date::date AS work_date,
-      we.job_no1 AS bill_no,
-
-      COALESCE(j.job_code, '') AS job_code,
-      COALESCE(j.job_type, '') AS job_type,
-
-      COALESCE(wej.hours, 0) AS hours,
-      COALESCE(wej.customer_total, 0) AS fee,
-      COALESCE(wej.wage_total, wej.pay, 0) AS wage
-    FROM work_entries we
-    JOIN work_entry_jobs wej ON wej.work_entry_id = we.id
-    LEFT JOIN jobs j ON j.id = wej.job_id AND j.company_id = we.company_id
-    WHERE we.company_id = $1
-      AND we.worker_id = $2
-      AND we.work_date::date >= $3::date
-      AND we.work_date::date <= $4::date
-      ${paySql}
-      ${jobNoSql}
-    ORDER BY
-      we.work_date::date,
-      (NULLIF(TRIM(we.job_no1), '')::int) NULLS LAST,
-      we.job_no1,
-      COALESCE(j.job_code,''),
-      COALESCE(j.job_type,'')
-  `;
-
-  const r = await db.query(sql, [companyId, workerId, start, end]);
-  return r.rows || [];
-}
 
 async function queryWorkerPayslipLinesGrouped({
   companyId,
@@ -1400,49 +1590,6 @@ async function queryWorkerPayslipLinesGrouped({
 
   const r = await db.query(sql, [companyId, workerId, start, end]);
   return r.rows || [];
-}
-
-async function getWorkerByIdPg({ companyId, workerId }) {
-  try {
-    const r = await db.query(
-      `SELECT id, worker_code,
-              COALESCE(worker_name, worker_english_name, '') AS worker_name
-       FROM workers
-       WHERE id = $1 AND company_id = $2`,
-      [workerId, companyId]
-    );
-    return r.rows?.[0] || null;
-  } catch {
-    return null;
-  }
-}
-
-function parseWorkerIdsFromQuery(req) {
-  // Accept:
-  // - workerId=3
-  // - workerIds=1,2,3
-  // - workerIds[]=1&workerIds[]=2 (optional)
-  const one = String(req.query.workerId || "").trim();
-  const listRaw =
-    req.query.workerIds ??
-    req.query["workerIds[]"] ??
-    (one ? one : "");
-
-  const arr = Array.isArray(listRaw) ? listRaw : String(listRaw).split(",");
-  const ids = arr
-    .map((x) => Number(String(x).trim()))
-    .filter((n) => Number.isFinite(n) && n > 0);
-
-  // de-dupe keep order
-  const out = [];
-  const seen = new Set();
-  for (const id of ids) {
-    if (!seen.has(id)) {
-      seen.add(id);
-      out.push(id);
-    }
-  }
-  return out;
 }
 
 router.get("/worker-payslip", async (req, res) => {
@@ -1510,6 +1657,7 @@ router.get("/worker-payslip/pdf", async (req, res) => {
     const companyId = Number(req.query.companyId || 1);
     const start = req.query.start;
     const end = req.query.end;
+    const lang = resolveLang(req);
 
     const workerIds = parseWorkerIdsFromQuery(req);
 
@@ -1552,6 +1700,8 @@ router.get("/worker-payslip/pdf", async (req, res) => {
     };
 
     const titleCn = monthTitleFromRange(start, end);
+    const titleEn = monthTitleFromRangeEn(start, end);
+    const title = lang === "zh" ? titleCn : titleEn;
 
     const filename = `Worker_Payslip_${workerIds.join("-")}_${start}_to_${end}.pdf`;
     res.setHeader("Content-Type", "application/pdf");
@@ -1600,7 +1750,7 @@ router.get("/worker-payslip/pdf", async (req, res) => {
       if (!isFirstPage) doc.addPage();
 
       // ===== Header =====
-      doc.font("NotoSC").fontSize(14).fillColor("#000").text(titleCn, { align: "center" });
+      doc.font("NotoSC").fontSize(14).fillColor("#000").text(title, { align: "center" });
       doc.moveDown(0.6);
 
       doc.fontSize(10).text(`${worker.worker_code || ""}    ${worker.worker_name || ""}`, { align: "left" });
@@ -1646,10 +1796,10 @@ router.get("/worker-payslip/pdf", async (req, res) => {
         doc.restore();
 
         let x = x0;
-        drawCell("项目", x, y, col.job, "center"); x += col.job;
-        drawCell("时钟", x, y, col.hours, "center"); x += col.hours;
-        drawCell("收费", x, y, col.fee, "center"); x += col.fee;
-        drawCell("工资", x, y, col.wage, "center");
+        drawCell(t(lang, "Job Description", "项目"), x, y, col.job, "center"); x += col.job;
+        drawCell(t(lang, "Hours", "时钟"), x, y, col.hours, "center"); x += col.hours;
+        drawCell(t(lang, "Fees", "收费"), x, y, col.fee, "center"); x += col.fee;
+        drawCell(t(lang, "Wages", "工资"), x, y, col.wage, "center");
         y += rowH;
       };
 
@@ -1658,7 +1808,7 @@ router.get("/worker-payslip/pdf", async (req, res) => {
           doc.addPage();
           y = doc.page.margins.top;
           // re-print title + worker line on continued pages (optional, looks nicer)
-          doc.font("NotoSC").fontSize(12).fillColor("#000").text(titleCn, { align: "center" });
+          doc.font("NotoSC").fontSize(12).fillColor("#000").text(title, { align: "center" });
           doc.moveDown(0.3);
           doc.fontSize(10).text(`${worker.worker_code || ""}    ${worker.worker_name || ""}`, { align: "left" });
           doc.moveDown(0.4);
@@ -1686,7 +1836,7 @@ router.get("/worker-payslip/pdf", async (req, res) => {
       doc.restore();
 
       let x = x0;
-      drawCell("TOTAL", x, y, col.job, "left"); x += col.job;
+      drawCell(t(lang, "TOTAL", "总数"), x, y, col.job, "left"); x += col.job;
       drawCell(fmt2(totals.total_hours), x, y, col.hours, "right"); x += col.hours;
       drawCell("", x, y, col.fee, "right"); x += col.fee;
       drawCell(fmt2(totals.total_wage), x, y, col.wage, "right");
@@ -1712,7 +1862,7 @@ router.get("/worker-payslip/pdf", async (req, res) => {
       });
 
       doc.fontSize(9).fillColor("#000");
-      doc.text(`${formatDMY(start)}   till   ${formatDMY(end)}`, x0, footerTop + 18, {
+      doc.text(t(lang, `${formatDMY(start)}   till   ${formatDMY(end)}`, `${formatDMY(start)}   至   ${formatDMY(end)}`), x0, footerTop + 18, {
         width: pageW,
         align: "center",
       });
@@ -1727,25 +1877,25 @@ router.get("/worker-payslip/pdf", async (req, res) => {
       const monthOf = monthYearLabel(end);
 
       doc.fontSize(9).fillColor("#000");
-      doc.text(`Worker wages for the month of  :    ${monthOf}`, leftX, blockY, {
+      doc.text(t(lang, `Worker wages for the month of  :    ${monthOf}`, `本月工资：    ${monthOf}`), leftX, blockY, {
         width: leftW,
         align: "left",
       });
-      doc.text(`I am hereby acknowledging the receipts of my wages`, leftX, blockY + 14, {
+      doc.text(t(lang, `I am hereby acknowledging the receipts of my wages`, `本人确认已收到工资`), leftX, blockY + 14, {
         width: leftW,
         align: "left",
       });
-      doc.text(`amounting to RM ${fmt2(totals.total_wage)}`, leftX, blockY + 28, {
+      doc.text(t(lang, `amounting to RM ${fmt2(totals.total_wage)}`, `金额：RM ${fmt2(totals.total_wage)}`), leftX, blockY + 28, {
         width: leftW,
         align: "left",
       });
 
-      doc.text(`签名：  ______________________________`, rightX, blockY + 28, {
+      doc.text(t(lang, `Signature:  ______________________________`, `签名：  ______________________________`), rightX, blockY + 28, {
         width: rightW,
         align: "left",
       });
 
-      doc.text(`编号： ${worker.worker_code || ""}    ${worker.worker_name || ""}`, rightX, blockY + 55, {
+      doc.text(t(lang, `Code: ${worker.worker_code || ""}    ${worker.worker_name || ""}`, `编号： ${worker.worker_code || ""}    ${worker.worker_name || ""}`), rightX, blockY + 55, {
         width: rightW,
         align: "left",
       });
@@ -1767,3 +1917,4 @@ router.get("/worker-payslip/pdf", async (req, res) => {
 
 
 export default router;
+
