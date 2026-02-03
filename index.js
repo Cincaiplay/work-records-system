@@ -45,7 +45,7 @@ app.use(express.json());
 // Behind nginx / load balancer (HTTPS termination)
 app.set("trust proxy", 1);
 
-// --- sessions (ONE time only) ---
+// --- sessions ---
 app.use(
   session({
     store: new PgSession({
@@ -59,18 +59,14 @@ app.use(
     cookie: {
       httpOnly: true,
       sameSite: "lax",
-      // Option A (strict): secure in production only (requires HTTPS to be ready)
       secure: process.env.NODE_ENV === "production",
-
-      // Option B (flexible): uncomment this and control with env var instead
-      // secure: process.env.SESSION_COOKIE_SECURE === "true",
 
       maxAge: 1000 * 60 * 60 * 8,
     },
   })
 );
 
-// --- locals (AFTER session) ---
+// --- locals ---
 app.use((req, res, next) => {
   const user = req.session?.user || null;
 
