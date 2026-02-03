@@ -39,6 +39,14 @@ const norm = (v) => String(v ?? "").trim();
 const toMoney0 = (v) => (norm(v) === "" || !Number.isFinite(Number(v)) ? 0 : Number(v));
 const canSeeRates = () => String(document.body?.dataset?.canSeeRates || "0") === "1";
 
+function refreshHotBatch() {
+  if (!hotBatch) return;
+  if (typeof hotBatch.refreshDimensions === "function") {
+    hotBatch.refreshDimensions();
+  }
+  hotBatch.render();
+}
+
 // ✅ companyId must be dynamic (admin can change company on first load)
 const getCompanyId = () =>
   (typeof window.getCurrentCompanyId === "function" ? window.getCurrentCompanyId() : null) ||
@@ -375,9 +383,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         if (!hotBatch) {
           const rowCount = parseInt($("batchRowCount")?.value, 10) || 10;
           initHotBatch(rowCount);
-        } else {
-          setTimeout(() => hotBatch?.render(), 0);
         }
+        setTimeout(() => refreshHotBatch(), 0);
       }
     });
   }
@@ -385,7 +392,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   applyRatesVisibility();
 });
 
-window.addEventListener("resize", () => hotBatch?.render());
+window.addEventListener("resize", () => refreshHotBatch());
 
 /* =========================
    Batch row count helpers
