@@ -38,6 +38,7 @@ const todayISO = () => new Date().toISOString().split("T")[0];
 const norm = (v) => String(v ?? "").trim();
 const toMoney0 = (v) => (norm(v) === "" || !Number.isFinite(Number(v)) ? 0 : Number(v));
 const canSeeRates = () => String(document.body?.dataset?.canSeeRates || "0") === "1";
+const isValidWageRate = (v) => Number.isFinite(v) && v !== 0;
 
 function refreshHotBatch() {
   if (!hotBatch) return;
@@ -505,7 +506,9 @@ window.addEntryToTable = async function () {
     const customerTotal = customerRate * hours;
 
     let wageRate = getBaseWageRate(job, worker);
-    if (!wageRate || wageRate <= 0) throw new Error(`No valid base wage for job "${code}" (check job wage tiers).`);
+    if (!isValidWageRate(wageRate)) {
+      throw new Error(`No valid base wage for job "${code}" (check job wage tiers).`);
+    }
 
     return {
       job_code: job.job_code,
@@ -527,7 +530,8 @@ window.addEntryToTable = async function () {
     }
   }
 
-  const hasCustomWage = useCustomOverride?.checked && Number.parseFloat(customWageRateInput?.value) > 0;
+  const customWageParsed = Number.parseFloat(customWageRateInput?.value);
+  const hasCustomWage = useCustomOverride?.checked && Number.isFinite(customWageParsed) && customWageParsed !== 0;
 
   if (
     lines.length > 1 &&
@@ -542,8 +546,8 @@ window.addEntryToTable = async function () {
 
 
   if (useCustomOverride?.checked) {
-    const customWage = parseFloat(customWageRateInput?.value);
-    if (!isNaN(customWage) && customWage > 0) {
+    const customWage = Number.parseFloat(customWageRateInput?.value);
+    if (Number.isFinite(customWage) && customWage !== 0) {
       lines.forEach((x) => (x.wage_rate = customWage));
     }
   }
@@ -1267,9 +1271,11 @@ window.addBatchRowsToPending = async function () {
             failures.push({ rowIndex: i, reason: `Missing customer price for "${job.job_type}"` });
           } else {
             let wageRate =
-              Number(p.wage_rate) > 0 ? Number(p.wage_rate) : getBaseWageRate(job, worker);
+              isValidWageRate(Number(p.wage_rate))
+                ? Number(p.wage_rate)
+                : getBaseWageRate(job, worker);
 
-            if (!wageRate || wageRate <= 0) {
+            if (!isValidWageRate(wageRate)) {
               failures.push({ rowIndex: i, reason: `Missing wage rate for "${job.job_type}"` });
             } else {
               const customerTotal = customerRate * hours;
@@ -1346,9 +1352,11 @@ window.addBatchRowsToPending = async function () {
         }
 
         let wageRate =
-          Number(ch.wage_rate) > 0 ? Number(ch.wage_rate) : getBaseWageRate(job, worker);
+          isValidWageRate(Number(ch.wage_rate))
+            ? Number(ch.wage_rate)
+            : getBaseWageRate(job, worker);
 
-        if (!wageRate || wageRate <= 0) {
+        if (!isValidWageRate(wageRate)) {
           failures.push({ rowIndex: i, reason: `Missing wage rate for "${job.job_type}"` });
           jobs.length = 0;
           break;
@@ -1474,7 +1482,7 @@ function applyMultiJob5050WithExtraHours(jobs) {
   });
 
   // if we can't find a valid min rate, do nothing
-  if (!Number.isFinite(minRate) || minRate <= 0) return;
+  if (!Number.isFinite(minRate) || minRate === 0) return;
 
   for (let i = 0; i < jobs.length; i++) {
     const j = jobs[i];
@@ -1496,7 +1504,7 @@ function applyMultiJob5050WithExtraHours(jobs) {
     }
 
     // cheapest job: first 1 hour base, rest 50/50 (if any)
-    if (!Number.isFinite(base) || base <= 0) continue;
+    if (!Number.isFinite(base) || base === 0) continue;
 
     if (hours <= 1) {
       j.wage_rate = base;
@@ -1528,7 +1536,7 @@ function getBaseWageRate(job, worker) {
   const match = (job.wage_rates || []).find((x) => Number(x.tier_id) === Number(tierId));
   const rate = Number(match?.wage_rate);
 
-  return Number.isFinite(rate) && rate > 0 ? rate : null;
+  return Number.isFinite(rate) && rate !== 0 ? rate : null;
 }
 
 const getMonthKey = (yyyy_mm_dd) => String(yyyy_mm_dd || "").slice(0, 7);
