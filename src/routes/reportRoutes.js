@@ -1718,7 +1718,7 @@ router.get("/worker-payslip/pdf", async (req, res) => {
 
     const renderOneWorker = async (workerId, isFirstPage) => {
       const worker = await getWorkerByIdPg({ companyId, workerId });
-      if (!worker) return; // skip missing worker id silently
+      if (!worker) return false; // skip missing worker id silently
 
       const grouped = await queryWorkerPayslipLinesGrouped({
         companyId,
@@ -1736,6 +1736,9 @@ router.get("/worker-payslip/pdf", async (req, res) => {
         fee: num(r.fee),
         wage: num(r.wage),
       }));
+
+      // Skip workers that have no records in the selected date range.
+      if (!rows.length) return false;
 
       const totals = rows.reduce(
         (acc, r) => {
@@ -1899,13 +1902,23 @@ router.get("/worker-payslip/pdf", async (req, res) => {
         width: rightW,
         align: "left",
       });
+
+      return true;
     };
 
     // render in order, one worker per page
     let printed = 0;
     for (const wid of workerIds) {
-      await renderOneWorker(wid, printed === 0);
-      printed += 1;
+      const ok = await renderOneWorker(wid, printed === 0);
+      if (ok) printed += 1;
+    }
+
+    if (printed === 0) {
+      doc.font("NotoSC").fontSize(12).fillColor("#000");
+      doc.text(
+        t(lang, "No records found for selected workers in this period.", "所选技师在该期间没有工作记录。"),
+        { align: "center" }
+      );
     }
 
     doc.end();
