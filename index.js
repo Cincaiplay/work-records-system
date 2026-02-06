@@ -73,7 +73,9 @@ app.use((req, res, next) => {
   res.locals.user = user;
   res.locals.isAdmin = Number(user?.is_admin) === 1;
   res.locals.permissions = Array.isArray(user?.permissions) ? user.permissions : [];
-  res.locals.can = (perm) => res.locals.isAdmin || res.locals.permissions.includes(perm);
+  const permSet = new Set(res.locals.permissions.map((p) => String(p || "").toLowerCase()));
+  res.locals.can = (perm) =>
+    res.locals.isAdmin || permSet.has(String(perm || "").toLowerCase());
 
   if (user?.id) {
     if (!res.locals.isAdmin) {

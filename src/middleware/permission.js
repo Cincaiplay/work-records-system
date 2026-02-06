@@ -26,7 +26,7 @@ export function requirePermission(code) {
         JOIN role_permissions rp ON rp.role_id = r.id
         JOIN permissions p ON p.id = rp.permission_id
         WHERE u.id = $1
-          AND p.code = $2
+          AND LOWER(p.code) = LOWER($2)
           AND p.is_active = 1
         LIMIT 1
         `,
@@ -66,7 +66,7 @@ export async function hasPermission(userId, code) {
       JOIN role_permissions rp ON rp.role_id = r.id
       JOIN permissions p ON p.id = rp.permission_id
       WHERE u.id = $1
-        AND p.code = $2
+        AND LOWER(p.code) = LOWER($2)
         AND p.is_active = 1
       LIMIT 1
       `,

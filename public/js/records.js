@@ -795,8 +795,30 @@ function applyRecordFilters() {
   const workerVal = (document.getElementById("filterWorker")?.value || "").toLowerCase().trim();
   const jobVal = (document.getElementById("filterJob")?.value || "").toLowerCase().trim();
   const noteVal = (document.getElementById("filterNote")?.value || "").toLowerCase().trim();
+  const mismatchOnly = document.getElementById("filterMismatchTotals")?.checked === true;
 
-  recordsFilterActive = !!(dateFrom || dateTo || jobNoVal || workerVal || jobVal || noteVal);
+  recordsFilterActive = !!(dateFrom || dateTo || jobNoVal || workerVal || jobVal || noteVal || mismatchOnly);
+
+  let mismatchSet = null;
+  if (mismatchOnly) {
+    const sums = new Map();
+    (recordsCache || []).forEach(e => {
+      const id = Number(e.work_entry_id);
+      if (!Number.isFinite(id)) return;
+      const s = sums.get(id) || { cust: 0, fees: Number(e.fees_collected ?? 0) || 0 };
+      s.cust += Number(e.customer_total ?? 0) || 0;
+      // keep latest fees_collected seen (same per entry)
+      s.fees = Number(e.fees_collected ?? 0) || 0;
+      sums.set(id, s);
+    });
+
+    mismatchSet = new Set();
+    sums.forEach((v, id) => {
+      const cust = Number(v.cust || 0);
+      const fees = Number(v.fees || 0);
+      if (cust.toFixed(2) !== fees.toFixed(2)) mismatchSet.add(id);
+    });
+  }
 
   filteredRecords = recordsCache.filter(e => {
     const dateText = (e.work_date || "").trim();
@@ -820,6 +842,10 @@ function applyRecordFilters() {
 
     if (jobVal && !jobText.includes(jobVal)) return false;
     if (noteVal && !noteText.includes(noteVal)) return false;
+    if (mismatchOnly) {
+      const id = Number(e.work_entry_id);
+      if (!Number.isFinite(id) || !mismatchSet?.has(id)) return false;
+    }
 
     return true;
   });
@@ -1168,6 +1194,8 @@ document.addEventListener("DOMContentLoaded", () => {
       const el = document.getElementById(id);
       if (el) el.addEventListener("input", applyRecordFilters);
     });
+
+  document.getElementById("filterMismatchTotals")?.addEventListener("change", applyRecordFilters);
 
   // Select all (ONLY visible rows, so collapse doesn’t accidentally select hidden children)
   document.getElementById("selectAllRecords")?.addEventListener("change", function () {

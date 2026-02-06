@@ -24,37 +24,37 @@
         <!-- Menu -->
         <div class="collapse navbar-collapse" id="navbarMain">
             <ul class="navbar-nav ms-auto">
-                <% if( isAdmin || permissions.includes("PAGE_DASHBOARD")) { %>
+                <% if( can("PAGE_DASHBOARD")) { %>
                 <li class="nav-item">
                     <a class="nav-link <%= active === 'dashboard' ? 'active' : '' %>" href="/dashboard">Dashboard</a>
                 </li>
                 <% } %>
 
-                <% if( isAdmin || permissions.includes("PAGE_WORKERS")) { %>
+                <% if( can("PAGE_WORKERS")) { %>
                 <li class="nav-item">
                     <a class="nav-link <%= active === 'workers' ? 'active' : '' %>" href="/workers">Workers</a>
                 </li>
                 <% } %>
 
-                <% if( isAdmin || permissions.includes("PAGE_JOBS")) { %>
+                <% if( can("PAGE_JOBS")) { %>
                 <li class="nav-item">
                     <a class="nav-link <%= active === 'jobs' ? 'active' : '' %>" href="/jobs">Jobs</a>
                 </li>
                 <% } %>
 
-                <% if( isAdmin || permissions.includes("PAGE_COMPANIES")) { %>
+                <% if( can("PAGE_COMPANIES")) { %>
                 <li class="nav-item">
                     <a class="nav-link <%= active === 'companies' ? 'active' : '' %>" href="/companies">Companies</a>
                 </li>
                 <% } %>
 
-                <% if( isAdmin || permissions.includes("PAGE_RECORDS")) { %>
+                <% if( can("PAGE_RECORDS")) { %>
                 <li class="nav-item">
                     <a class="nav-link <%= active === 'records' ? 'active' : '' %>" href="/records">Records</a>
                 </li>
                 <% } %>
 
-                <% if( isAdmin || permissions.includes("PAGE_REPORTS")) { %>
+                <% if( can("PAGE_REPORTS")) { %>
                 <li class="nav-item">
                     <a class="nav-link <%= active === 'reports' ? 'active' : '' %>" href="/reports">Reports</a>
                 </li>

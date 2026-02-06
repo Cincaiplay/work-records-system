@@ -77,7 +77,9 @@ router.post("/login", async (req, res) => {
       [user.id]
     );
 
-    const permissions = (pr.rows || []).map((x) => x.code);
+    const permissions = (pr.rows || [])
+      .map((x) => String(x.code || "").trim().toLowerCase())
+      .filter((x) => x);
 
     // ✅ Save session (same shape as before)
     req.session.user = {

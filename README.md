@@ -34,7 +34,7 @@ The application emphasizes **data consistency**, **auditability**, and **permiss
 ## Tech Stack
 
 - **Backend:** Node.js, Express
-- **Database:** SQLite (relational schema with migrations)
+- **Database:** PostgreSQL (relational schema with migrations)
 - **Frontend:** EJS, Bootstrap 5
 - **Auth & Security:** Session-based auth, RBAC
 - **Reporting:** PDF generation

@@ -228,6 +228,38 @@ router.post("/management/users/:id/toggle", requireAdmin, async (req, res) => {
   }
 });
 
+router.post("/management/users/:id/delete", requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+
+  if (!Number.isFinite(id) || id <= 0) {
+    return redirectMgmt(res, "users", { error: "Invalid user id" });
+  }
+  if (Number(req.session?.user?.id) === id) {
+    return redirectMgmt(res, "users", { error: "You cannot delete your own account." });
+  }
+
+  try {
+    const r = await db.query(
+      `SELECT is_active, is_admin FROM users WHERE id = $1`,
+      [id]
+    );
+    if (r.rowCount === 0) return redirectMgmt(res, "users", { error: "User not found" });
+
+    const row = r.rows[0] || {};
+    if (Number(row.is_admin) === 1) {
+      return redirectMgmt(res, "users", { error: "Cannot delete admin accounts." });
+    }
+    if (Number(row.is_active) === 1) {
+      return redirectMgmt(res, "users", { error: "Deactivate the user before deleting." });
+    }
+
+    await db.query(`DELETE FROM users WHERE id = $1`, [id]);
+    return redirectMgmt(res, "users", { success: "User deleted" });
+  } catch (err) {
+    return redirectMgmt(res, "users", { error: err.message });
+  }
+});
+
 router.post("/management/users/:id/update", requireAdmin, async (req, res) => {
   const id = Number(req.params.id);
   const username = (req.body.username || "").trim();

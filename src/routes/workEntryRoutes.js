@@ -29,7 +29,7 @@ async function getDaysLimitForUser(req) {
   if (!userId || isAdmin) return null;
 
   // ✅ Permission override (Option A)
-  if (user?.permissions?.includes("VIEW_FULL_HISTORY")) {
+  if ((user?.permissions || []).map(p => String(p || "").toLowerCase()).includes("view_full_history")) {
     return null;
   }
 

@@ -7,11 +7,11 @@ services:
       - "3000:3000"
     environment:
       NODE_ENV: production
-      # IMPORTANT: store sqlite in mounted folder, not inside container
-      DB_PATH: /app/data/data.sqlite
+      DB_DIALECT: postgres
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/work_records
       SESSION_SECRET: "change-me-long-random"
-    volumes:
-      - ./data:/app/data
+    depends_on:
+      - postgres
       
   postgres:
     image: postgres:16
