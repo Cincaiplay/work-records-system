@@ -1,9 +1,12 @@
 // src/routes/workEntryRoutes.js (PostgreSQL)
 import { Router } from "express";
+import multer from "multer";
+import { parse } from "csv-parse/sync";
 import db from "../config/db.js";
 import { requirePermission, hasPermission } from "../middleware/permission.js";
 
 const router = Router();
+const upload = multer({ storage: multer.memoryStorage() });
 
 /* =========================
    Company helpers
@@ -73,6 +76,90 @@ const toNum = (v) => {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 };
+
+function normalizeHeader(h) {
+  return String(h ?? "")
+    .replace(/^\uFEFF/, "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+}
+
+function cleanCell(v) {
+  return String(v ?? "").replace(/\u00A0/g, " ").trim();
+}
+
+function parseDateCell(v) {
+  const s = cleanCell(v);
+  if (!s) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) {
+    const [d, m, y] = s.split("/");
+    return `${y}-${m}-${d}`;
+  }
+  return null;
+}
+
+function parsePayType(v) {
+  const s = cleanCell(v).toLowerCase();
+  if (!s) return 0;
+  if (["1", "y", "yes", "true", "bank", "transfer"].includes(s)) return 1;
+  if (["0", "n", "no", "false", "cash"].includes(s)) return 0;
+  return 0;
+}
+
+function asNumberOrNull(v) {
+  const s = cleanCell(v);
+  if (s === "") return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+function rowHasAnyValue(obj) {
+  if (!obj || typeof obj !== "object") return false;
+  return Object.values(obj).some((v) => cleanCell(v) !== "");
+}
+
+async function loadImportLookups(companyId) {
+  const [workersR, jobsR, wagesR] = await Promise.all([
+    db.query(
+      `SELECT id, worker_code, wage_tier_id FROM workers WHERE company_id = $1`,
+      [companyId]
+    ),
+    db.query(
+      `SELECT id, job_code, normal_price FROM jobs WHERE company_id = $1`,
+      [companyId]
+    ),
+    db.query(
+      `SELECT job_id, tier_id, wage_rate FROM job_wages WHERE company_id = $1`,
+      [companyId]
+    ),
+  ]);
+
+  const workers = new Map(
+    (workersR.rows || []).map((w) => [String(w.worker_code || "").toLowerCase(), w])
+  );
+  const jobs = new Map(
+    (jobsR.rows || []).map((j) => [String(j.job_code || "").toLowerCase(), j])
+  );
+  const wageMap = new Map();
+  (wagesR.rows || []).forEach((r) => {
+    wageMap.set(`${r.job_id}:${r.tier_id}`, Number(r.wage_rate));
+  });
+
+  return { workers, jobs, wageMap };
+}
+
+async function getExistingJobNo1Set(companyId, jobNo1List) {
+  const list = Array.from(new Set(jobNo1List.filter(Boolean)));
+  if (!list.length) return new Set();
+
+  const r = await db.query(
+    `SELECT job_no1 FROM work_entries WHERE company_id = $1 AND job_no1 = ANY($2)`,
+    [companyId, list]
+  );
+  return new Set((r.rows || []).map((x) => String(x.job_no1 || "")));
+}
 
 function csvEscape(v) {
   if (v == null) return "";
@@ -180,6 +267,349 @@ router.get("/", async (req, res) => {
   } catch (err) {
     console.error("GET /api/work-entries error:", err);
     return res.status(500).json({ error: "Database error" });
+  }
+});
+
+/* =========================
+   IMPORT preview / import
+   POST /api/work-entries/import/preview
+   POST /api/work-entries/import
+   ========================= */
+router.post("/import/preview", requirePermission("WORK_ENTRY_CREATE"), upload.single("file"), async (req, res) => {
+  const companyId = getCompanyId(req);
+
+  try {
+    if (!req.file?.buffer) return res.status(400).json({ error: "Missing file" });
+
+    const text = req.file.buffer.toString("utf8").replace(/^\uFEFF/, "");
+    const records = parse(text, {
+      columns: true,
+      skip_empty_lines: true,
+      relax_column_count: true,
+    });
+
+    const { workers, jobs, wageMap } = await loadImportLookups(companyId);
+
+    const jobNo1List = [];
+    const rows = [];
+    const headerKeyByJobNo1 = new Map();
+    const errors = [];
+
+    const fileRows = Array.isArray(records) ? records : [];
+
+    for (let i = 0; i < fileRows.length; i++) {
+      const raw = fileRows[i];
+      if (!rowHasAnyValue(raw)) continue;
+
+      const row = {};
+      Object.entries(raw || {}).forEach(([k, v]) => {
+        row[normalizeHeader(k)] = v;
+      });
+
+      const work_date = parseDateCell(row.work_date || row.date);
+      const job_no1 = cleanCell(row.job_no1);
+      const job_no2 = cleanCell(row.job_no2) || "";
+      const worker_code = cleanCell(row.worker_code);
+      const job_code = cleanCell(row.job_code);
+      const hours = asNumberOrNull(row.hours);
+      const fees_collected = asNumberOrNull(row.fees_collected) ?? 0;
+      const is_bank = parsePayType(row.pay_type || row.is_bank);
+      const note = cleanCell(row.note);
+
+      const customer_rate = asNumberOrNull(row.customer_rate);
+      const wage_rate = asNumberOrNull(row.wage_rate);
+
+      let error = "";
+
+      if (!work_date) error = "Invalid Work Date (use YYYY-MM-DD).";
+      else if (!job_no1) error = "Missing Job No1.";
+      else if (!worker_code) error = "Missing Worker Code.";
+      else if (!job_code) error = "Missing Job Code.";
+      else if (!Number.isFinite(hours) || hours <= 0) error = "Invalid Hours (must be > 0).";
+
+      const worker = workers.get(worker_code.toLowerCase());
+      if (!error && !worker) error = `Worker not found: ${worker_code}`;
+      if (!error && !worker?.wage_tier_id) error = `Worker has no wage tier: ${worker_code}`;
+
+      const job = jobs.get(job_code.toLowerCase());
+      if (!error && !job) error = `Job not found: ${job_code}`;
+
+      if (!error) {
+        const baseRate = wage_rate != null
+          ? wage_rate
+          : wageMap.get(`${job.id}:${worker.wage_tier_id}`);
+        if (!Number.isFinite(baseRate)) error = `Missing wage rate for ${job_code}`;
+      }
+
+      if (!error) {
+        const headerKey = [
+          work_date,
+          job_no1,
+          job_no2,
+          String(worker?.id || ""),
+          String(is_bank),
+          String(fees_collected ?? 0),
+          note,
+        ].join("|");
+
+        if (headerKeyByJobNo1.has(job_no1) && headerKeyByJobNo1.get(job_no1) !== headerKey) {
+          error = `Job No1 "${job_no1}" appears with conflicting header data.`;
+        } else {
+          headerKeyByJobNo1.set(job_no1, headerKey);
+        }
+      }
+
+      jobNo1List.push(job_no1);
+
+      rows.push({
+        row: i + 1,
+        action: error ? "ERROR" : "INSERT",
+        work_date,
+        job_no1,
+        job_no2,
+        worker_code,
+        job_code,
+        hours,
+        fees_collected,
+        pay_type: is_bank ? "Bank" : "Cash",
+        customer_rate,
+        wage_rate,
+        note,
+        error,
+      });
+
+      if (error) errors.push(error);
+    }
+
+    const existingJobNo1 = await getExistingJobNo1Set(companyId, jobNo1List);
+    let willInsert = 0;
+    rows.forEach((r) => {
+      if (r.action === "ERROR") return;
+      if (existingJobNo1.has(String(r.job_no1 || ""))) {
+        r.action = "ERROR";
+        r.error = `Job No1 already exists: ${r.job_no1}`;
+        errors.push(r.error);
+      } else {
+        willInsert += 1;
+      }
+    });
+
+    return res.json({
+      totals: {
+        total: rows.length,
+        willInsert,
+        willUpdate: 0,
+        errors: errors.length,
+      },
+      rows,
+    });
+  } catch (err) {
+    console.error("work-entries import preview error:", err);
+    return res.status(500).json({ error: "Failed to preview import", details: err.message });
+  }
+});
+
+router.post("/import", requirePermission("WORK_ENTRY_CREATE"), upload.single("file"), async (req, res) => {
+  const companyId = getCompanyId(req);
+
+  try {
+    if (!req.file?.buffer) return res.status(400).json({ error: "Missing file" });
+
+    const text = req.file.buffer.toString("utf8").replace(/^\uFEFF/, "");
+    const records = parse(text, {
+      columns: true,
+      skip_empty_lines: true,
+      relax_column_count: true,
+    });
+
+    const { workers, jobs, wageMap } = await loadImportLookups(companyId);
+
+    const rows = [];
+    const jobNo1List = [];
+
+    const fileRows = Array.isArray(records) ? records : [];
+    for (let i = 0; i < fileRows.length; i++) {
+      const raw = fileRows[i];
+      if (!rowHasAnyValue(raw)) continue;
+
+      const row = {};
+      Object.entries(raw || {}).forEach(([k, v]) => {
+        row[normalizeHeader(k)] = v;
+      });
+
+      const work_date = parseDateCell(row.work_date || row.date);
+      const job_no1 = cleanCell(row.job_no1);
+      const job_no2 = cleanCell(row.job_no2) || null;
+      const worker_code = cleanCell(row.worker_code);
+      const job_code = cleanCell(row.job_code);
+      const hours = asNumberOrNull(row.hours);
+      const fees_collected = asNumberOrNull(row.fees_collected) ?? 0;
+      const is_bank = parsePayType(row.pay_type || row.is_bank);
+      const note = cleanCell(row.note) || null;
+
+      const customer_rate_raw = asNumberOrNull(row.customer_rate);
+      const customer_total_raw = asNumberOrNull(row.customer_total);
+      const wage_rate_raw = asNumberOrNull(row.wage_rate);
+      const wage_total_raw = asNumberOrNull(row.wage_total);
+
+      if (!work_date) throw new Error(`Row ${i + 1}: invalid work_date`);
+      if (!job_no1) throw new Error(`Row ${i + 1}: missing job_no1`);
+      if (!worker_code) throw new Error(`Row ${i + 1}: missing worker_code`);
+      if (!job_code) throw new Error(`Row ${i + 1}: missing job_code`);
+      if (!Number.isFinite(hours) || hours <= 0) throw new Error(`Row ${i + 1}: invalid hours`);
+
+      const worker = workers.get(worker_code.toLowerCase());
+      if (!worker) throw new Error(`Row ${i + 1}: worker not found (${worker_code})`);
+      if (!worker?.wage_tier_id) throw new Error(`Row ${i + 1}: worker has no wage tier (${worker_code})`);
+
+      const job = jobs.get(job_code.toLowerCase());
+      if (!job) throw new Error(`Row ${i + 1}: job not found (${job_code})`);
+
+      let customer_rate =
+        customer_rate_raw != null
+          ? customer_rate_raw
+          : (Number(job.normal_price || 0) || null);
+      if (customer_rate == null) throw new Error(`Row ${i + 1}: missing customer_rate (${job_code})`);
+
+      let wage_rate =
+        wage_rate_raw != null
+          ? wage_rate_raw
+          : wageMap.get(`${job.id}:${worker.wage_tier_id}`);
+      if (!Number.isFinite(wage_rate)) throw new Error(`Row ${i + 1}: missing wage_rate (${job_code})`);
+
+      let customer_total = customer_total_raw != null ? customer_total_raw : customer_rate * hours;
+      let wage_total = wage_total_raw != null ? wage_total_raw : wage_rate * hours;
+
+      rows.push({
+        work_date,
+        job_no1,
+        job_no2,
+        worker_id: worker.id,
+        is_bank,
+        fees_collected,
+        note,
+        job_id: job.id,
+        job_code: job.job_code,
+        hours,
+        customer_rate,
+        customer_total,
+        wage_tier_id: worker.wage_tier_id,
+        wage_rate,
+        wage_total,
+      });
+
+      jobNo1List.push(job_no1);
+    }
+
+    const existingJobNo1 = await getExistingJobNo1Set(companyId, jobNo1List);
+
+    // group by header key
+    const groups = new Map();
+    rows.forEach((r) => {
+      if (existingJobNo1.has(String(r.job_no1 || ""))) return;
+      const key = [
+        r.work_date,
+        r.job_no1,
+        r.job_no2 || "",
+        r.worker_id,
+        r.is_bank,
+        Number(r.fees_collected || 0),
+        r.note || "",
+      ].join("|");
+
+      if (!groups.has(key)) {
+        groups.set(key, {
+          header: {
+            company_id: companyId,
+            worker_id: r.worker_id,
+            work_date: r.work_date,
+            job_no1: r.job_no1,
+            job_no2: r.job_no2 || null,
+            fees_collected: r.fees_collected ?? 0,
+            is_bank: r.is_bank,
+            note: r.note || null,
+          },
+          jobs: [],
+        });
+      }
+
+      groups.get(key).jobs.push({
+        job_id: r.job_id,
+        hours: r.hours,
+        customer_rate: r.customer_rate,
+        customer_total: r.customer_total,
+        wage_tier_id: r.wage_tier_id,
+        wage_rate: r.wage_rate,
+        wage_total: r.wage_total,
+      });
+    });
+
+    let inserted = 0;
+    let skipped = 0;
+
+    await db.tx(async (client) => {
+      for (const g of groups.values()) {
+        const h = g.header;
+        if (existingJobNo1.has(String(h.job_no1 || ""))) {
+          skipped += 1;
+          continue;
+        }
+
+        const ins = await client.query(
+          `
+          INSERT INTO work_entries (
+            company_id, worker_id, work_date, job_no1, job_no2,
+            fees_collected, is_bank, note
+          ) VALUES ($1,$2,$3::date,$4,$5,$6,$7,$8)
+          RETURNING id
+          `,
+          [
+            h.company_id,
+            h.worker_id,
+            h.work_date,
+            h.job_no1,
+            h.job_no2,
+            h.fees_collected,
+            h.is_bank,
+            h.note,
+          ]
+        );
+
+        const headerId = ins.rows[0].id;
+
+        for (const line of g.jobs) {
+          await client.query(
+            `
+            INSERT INTO work_entry_jobs (
+              work_entry_id, job_id, hours,
+              customer_rate, customer_total,
+              wage_tier_id, wage_rate, wage_total,
+              rate, pay
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+            `,
+            [
+              headerId,
+              line.job_id,
+              line.hours,
+              line.customer_rate ?? 0,
+              line.customer_total ?? 0,
+              line.wage_tier_id ?? null,
+              line.wage_rate ?? 0,
+              line.wage_total ?? 0,
+              line.wage_rate ?? 0,
+              line.wage_total ?? 0,
+            ]
+          );
+        }
+
+        inserted += 1;
+      }
+    });
+
+    return res.json({ inserted, updated: 0, skipped });
+  } catch (err) {
+    console.error("work-entries import error:", err);
+    return res.status(500).json({ error: "Failed to import work entries", details: err.message });
   }
 });
 

@@ -476,6 +476,35 @@ router.post("/management/wage-tiers/create", requireAdmin, async (req, res) => {
   }
 });
 
+router.post("/management/wage-tiers/:id/update", requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  const company_id = req.body.company_id !== "" ? Number(req.body.company_id) : null;
+  const tier_code = (req.body.tier_code || "").trim();
+  const tier_name = (req.body.tier_name || "").trim();
+  const sort_order = req.body.sort_order !== "" ? Number(req.body.sort_order) : 0;
+
+  if (!Number.isFinite(id) || id <= 0) {
+    return redirectMgmt(res, "wage_tiers", { error: "Invalid wage tier id" });
+  }
+  if (!company_id || !tier_code || !tier_name) {
+    return redirectMgmt(res, "wage_tiers", { error: "Company, tier code, and tier name are required" });
+  }
+
+  try {
+    await db.query(
+      `
+      UPDATE wage_tiers
+      SET company_id = $1, tier_code = $2, tier_name = $3, sort_order = $4
+      WHERE id = $5
+      `,
+      [company_id, tier_code, tier_name, Number.isFinite(sort_order) ? sort_order : 0, id]
+    );
+    return redirectMgmt(res, "wage_tiers", { success: "Wage tier updated" });
+  } catch (err) {
+    return redirectMgmt(res, "wage_tiers", { error: err.message });
+  }
+});
+
 router.post("/management/wage-tiers/:id/toggle", requireAdmin, async (req, res) => {
   const id = Number(req.params.id);
 

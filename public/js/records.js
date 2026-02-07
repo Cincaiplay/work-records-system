@@ -5,6 +5,7 @@ let filteredRecords = [];
 let recordsPage = 1;
 let recordsPageSize = 10;
 let recordsFilterActive = false;
+let currentSortType = null;
 
 let jobsCache = [];      // [{id, job_code, job_type, customer_rate, wage_rates:[...]}]
 let tiersCache = [];     // [{id, tier_name}]
@@ -158,14 +159,39 @@ function buildGroupedEntries(flatRows) {
   });
 
   const groups = Array.from(map.values());
-  groups.sort((a, b) => {
-    const da = a.header.work_date || "";
-    const db = b.header.work_date || "";
-    if (da !== db) return da.localeCompare(db);
-    const ja = (a.header.job_no1 || "").localeCompare(b.header.job_no1 || "");
-    if (ja !== 0) return ja;
-    return String(a.header.worker_id || "").localeCompare(String(b.header.worker_id || ""));
+  groups.forEach(g => {
+    const lines = Array.isArray(g.lines) ? g.lines : [];
+    g.__wageTotal = lines.reduce((s, x) => s + (Number(x.wage_total) || 0), 0);
+    g.__customerTotal = lines.reduce((s, x) => s + (Number(x.customer_total) || 0), 0);
+    const jobLabels = lines.map(x => `${x.job_code || ""} ${x.job_type || ""}`.trim()).filter(Boolean);
+    g.__jobKey = jobLabels.length ? jobLabels.sort()[0] : "";
   });
+
+  const sortType = currentSortType;
+  if (!sortType) {
+    groups.sort((a, b) => {
+      const da = a.header.work_date || "";
+      const db = b.header.work_date || "";
+      if (da !== db) return da.localeCompare(db);
+      const ja = (a.header.job_no1 || "").localeCompare(b.header.job_no1 || "");
+      if (ja !== 0) return ja;
+      return String(a.header.worker_id || "").localeCompare(String(b.header.worker_id || ""));
+    });
+  } else {
+    groups.sort((a, b) => {
+      switch (sortType) {
+        case "date_asc": return (a.header.work_date || "").localeCompare(b.header.work_date || "");
+        case "date_desc": return (b.header.work_date || "").localeCompare(a.header.work_date || "");
+        case "job_asc": return (a.__jobKey || "").localeCompare(b.__jobKey || "");
+        case "job_desc": return (b.__jobKey || "").localeCompare(a.__jobKey || "");
+        case "wage_asc": return (a.__wageTotal || 0) - (b.__wageTotal || 0);
+        case "wage_desc": return (b.__wageTotal || 0) - (a.__wageTotal || 0);
+        case "customer_asc": return (a.__customerTotal || 0) - (b.__customerTotal || 0);
+        case "customer_desc": return (b.__customerTotal || 0) - (a.__customerTotal || 0);
+        default: return 0;
+      }
+    });
+  }
 
   return groups;
 }
@@ -287,8 +313,10 @@ function getCurrentCompanyIdSafe() {
 }
 
 // ---------- load records ----------
-function loadRecords() {
+function loadRecords(options = {}) {
   const companyId = getCurrentCompanyIdSafe();
+  const preservePage = options?.preservePage === true;
+  const desiredPage = Number.isFinite(options?.page) ? options.page : recordsPage;
   jobsCache = [];
   tiersCache = [];
   workersCache = [];
@@ -337,9 +365,9 @@ function loadRecords() {
 
       recordsCache = flat;
       filteredRecords = [];
-      recordsPage = 1;
+      recordsPage = preservePage ? Math.max(1, desiredPage || 1) : 1;
 
-      if (recordsFilterActive) applyRecordFilters();
+      if (recordsFilterActive) applyRecordFilters({ preservePage });
       else renderRecordsTable();
 
       document.querySelectorAll(".record-select").forEach(cb => {
@@ -650,6 +678,17 @@ function renderRecordsPaginationSingle(elementId, totalPages) {
   if (start < 1) { end += 1 - start; start = 1; }
   if (end > totalPages) { start -= end - totalPages; end = totalPages; if (start < 1) start = 1; }
 
+  const firstLi = document.createElement("li");
+  firstLi.className = "page-item" + (recordsPage === 1 ? " disabled" : "");
+  firstLi.innerHTML = `<button class="page-link">&laquo;</button>`;
+  firstLi.addEventListener("click", () => {
+    if (recordsPage > 1) {
+      recordsPage = 1;
+      renderRecordsTable();
+    }
+  });
+  ul.appendChild(firstLi);
+
   const prevLi = document.createElement("li");
   prevLi.className = "page-item" + (recordsPage === 1 ? " disabled" : "");
   prevLi.innerHTML = `<button class="page-link">&lt;</button>`;
@@ -682,6 +721,17 @@ function renderRecordsPaginationSingle(elementId, totalPages) {
     }
   });
   ul.appendChild(nextLi);
+
+  const lastLi = document.createElement("li");
+  lastLi.className = "page-item" + (recordsPage === totalPages ? " disabled" : "");
+  lastLi.innerHTML = `<button class="page-link">&raquo;</button>`;
+  lastLi.addEventListener("click", () => {
+    if (recordsPage < totalPages) {
+      recordsPage = totalPages;
+      renderRecordsTable();
+    }
+  });
+  ul.appendChild(lastLi);
 }
 
 // ---------- selection / header checkbox ----------
@@ -753,42 +803,13 @@ async function deleteSelectedRecords() {
 
 // ---------- sorting / filtering ----------
 function sortRecords(type) {
-  const data = getVisibleFlatRows();
-
-  data.sort((a, b) => {
-    const da = a.work_date || "";
-    const db = b.work_date || "";
-
-    const jobA = `${a.job_code || ""} ${a.job_type || ""}`.trim();
-    const jobB = `${b.job_code || ""} ${b.job_type || ""}`.trim();
-
-    const wageA = Number(a.wage_total ?? a.pay ?? 0) || 0;
-    const wageB = Number(b.wage_total ?? b.pay ?? 0) || 0;
-
-    const custA = Number(a.customer_total ?? 0) || 0;
-    const custB = Number(b.customer_total ?? 0) || 0;
-
-    switch (type) {
-      case "date_asc": return da.localeCompare(db);
-      case "date_desc": return db.localeCompare(da);
-      case "job_asc": return jobA.localeCompare(jobB);
-      case "job_desc": return jobB.localeCompare(jobA);
-      case "wage_asc": return wageA - wageB;
-      case "wage_desc": return wageB - wageA;
-      case "customer_asc": return custA - custB;
-      case "customer_desc": return custB - custA;
-      default: return 0;
-    }
-  });
-
-  if (recordsFilterActive) filteredRecords = data;
-  else recordsCache = data;
-
+  currentSortType = type || null;
   recordsPage = 1;
   renderRecordsTable();
 }
 
-function applyRecordFilters() {
+function applyRecordFilters(options = {}) {
+  const preservePage = options?.preservePage === true;
   const dateFrom = document.getElementById("filterDateFrom")?.value || "";
   const dateTo = document.getElementById("filterDateTo")?.value || "";
   const jobNoVal = (document.getElementById("filterJobNo")?.value || "").toLowerCase().trim();
@@ -836,8 +857,14 @@ function applyRecordFilters() {
 
     if (workerVal) {
       const exact = workerVal.startsWith("=");
-      const needle = exact ? workerVal.slice(1) : workerVal;
-      if (exact ? workerText.trim() !== needle : !workerText.includes(needle)) return false;
+      const needle = (exact ? workerVal.slice(1) : workerVal).trim();
+      const isNumericCode = /^\d+$/.test(needle);
+      if (isNumericCode) {
+        const code = String(e.worker_code || "").toLowerCase().trim();
+        if (code !== needle) return false;
+      } else {
+        if (exact ? workerText.trim() !== needle : !workerText.includes(needle)) return false;
+      }
     }
 
     if (jobVal && !jobText.includes(jobVal)) return false;
@@ -850,7 +877,7 @@ function applyRecordFilters() {
     return true;
   });
 
-  recordsPage = 1;
+  if (!preservePage) recordsPage = 1;
   renderRecordsTable();
 }
 
@@ -1163,8 +1190,9 @@ async function saveEditEntry() {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
 
+    const prevPage = recordsPage;
     editModal?.hide();
-    loadRecords();
+    loadRecords({ preservePage: true, page: prevPage });
   } catch (e) {
     alert(e.message || "Failed to update record.");
   }

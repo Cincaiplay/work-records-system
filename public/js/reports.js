@@ -687,7 +687,9 @@ function exportWorkerJobListingPdf() {
   const endDate = document.getElementById("reportEndDate")?.value || "";
   if (!startDate || !endDate) return alert("Please select start and end date.");
 
-  const qs = getPayTypeQuery() + getJobNoQuery() + getLangQuery();
+  const workerIds = getSelectedWorkerIds();
+  const wq = workerIds.length ? buildWorkerIdsQueryParam(workerIds) : "";
+  const qs = getPayTypeQuery() + getJobNoQuery() + getLangQuery() + wq;
   window.open(
     `/api/reports/account-worker-job-listing/pdf?companyId=${companyId}&start=${startDate}&end=${endDate}${qs}`,
     "_blank"

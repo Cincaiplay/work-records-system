@@ -4,12 +4,11 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-  "start": "node index.js",
-  "dev": "nodemon index.js",
-  "seed": "node src/config/seed.js",
-  "migrate": "psql \"$DATABASE_URL\" -f migrations/001_init.sql"
-}
-,
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "seed": "node src/config/seed.js",
+    "migrate": "psql \"$DATABASE_URL\" -f migrations/001_init.sql"
+  },
   "keywords": [],
   "author": "CheeYuKoh",
   "license": "ISC",

@@ -257,9 +257,9 @@
           <div>
             <h2 class="h4 fw-bold mb-1">Work Entries</h2>
           </div>
-          <button type="button" class="btn btn-success d-none" id="importExcelBtn">
+          <button type="button" class="btn btn-success" id="importExcelBtn" onclick="openImportModal('work_entries')">
             <i class="bi bi-file-earmark-spreadsheet"></i>
-            Import Excel (Bulk)
+            Import Work Entries (CSV)
           </button>
         </div>
 
@@ -340,8 +340,11 @@
   <!-- Global company switcher -->
   <script src="/js/company-switcher.js"></script>
 
+  <%- include("partials/importModal") %>
+
   <!-- Dashboard logic -->
   <script src="/js/dashboard.js"></script>
+  <script src="/js/importExport.js"></script>
 </body>
 
 </html>

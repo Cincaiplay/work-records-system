@@ -69,14 +69,27 @@ router.get("/", async (req, res) => {
   try {
     const r = await db.query(
       `
-      SELECT w.*,
-             wt.tier_name AS wage_tier_name
-        FROM workers w
-        LEFT JOIN wage_tiers wt
-          ON wt.id = w.wage_tier_id
-         AND wt.company_id = w.company_id
-       WHERE w.company_id = $1
-       ORDER BY w.worker_code ASC
+      SELECT
+        w.id,
+        w.company_id,
+        w.worker_code,
+        w.worker_name,
+        w.worker_english_name,
+        w.passport_no,
+        w.employment_start::text AS employment_start,
+        w.nationality,
+        w.terminated,
+        w.field1,
+        w.is_active,
+        w.wage_tier_id,
+        w.created_at,
+        wt.tier_name AS wage_tier_name
+      FROM workers w
+      LEFT JOIN wage_tiers wt
+        ON wt.id = w.wage_tier_id
+       AND wt.company_id = w.company_id
+      WHERE w.company_id = $1
+      ORDER BY w.worker_code ASC
       `,
       [companyId]
     );
@@ -278,7 +291,8 @@ router.get("/export", async (req, res) => {
     const r = await db.query(
       `
       SELECT worker_code, worker_name, worker_english_name, passport_no,
-             nationality, employment_start, is_active, wage_tier_id, field1
+             nationality, employment_start::text AS employment_start,
+             is_active, wage_tier_id, field1
         FROM workers
        WHERE company_id = $1
        ORDER BY worker_code ASC

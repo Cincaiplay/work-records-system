@@ -1135,74 +1135,68 @@ router.get("/account-worker-job-listing/pdf", async (req, res) => {
       return y + rowH;
     };
 
-    const renderWorkerOnePage = (w, isFirst) => {
-      if (!isFirst) doc.addPage();
+    const renderWorkerMultiPage = (w, isFirstWorker) => {
+      const list = Array.isArray(w.rows) ? w.rows : [];
+      if (!list.length) return;
 
-      // Reset cursor to top area
-      doc.font("NotoSC").fillColor("#000");
-      let y = doc.page.margins.top;
+      const rowH = 16;
+      const fontSize = 9;
+      let i = 0;
+      let firstPageForWorker = true;
 
-      // Optional: show report title on every page (looks nicer)
-      drawReportTitle();
-      y = doc.y;
+      while (i < list.length) {
+        if (!isFirstWorker || !firstPageForWorker) doc.addPage();
 
-      // Worker header
-      doc.font("NotoSC").fontSize(11).fillColor("#000").text(`${w.worker_code || ""}    ${w.worker_name || ""}`, x0, y);
-      y += 18;
+        doc.font("NotoSC").fillColor("#000");
+        let y = doc.page.margins.top;
 
-      // Auto-shrink to fit ONE page
-      let rowH = 16;
-      let fontSize = 9;
+        drawReportTitle();
+        y = doc.y;
 
-      const available =
-        bottomY() -
-        y -               // current y
-        10 -              // breathing
-        (rowH + 6);       // total row space
+        doc
+          .font("NotoSC")
+          .fontSize(11)
+          .fillColor("#000")
+          .text(`${w.worker_code || ""}    ${w.worker_name || ""}`, x0, y);
+        y += 18;
 
-      const maxRowsAtCurrent = Math.floor(available / rowH) - 1; // -1 for header row
-      const totalRowsNeeded = (w.rows || []).length;
+        y = drawTableHeader(y, fontSize, rowH);
 
-      // shrink if too many
-      while (totalRowsNeeded > maxRowsAtCurrent && rowH > 12) {
-        rowH -= 1;
+        while (i < list.length) {
+          const isLastRow = i === list.length - 1;
+          const spaceForTotal = isLastRow ? (rowH + 6) : 0;
+          const limit = bottomY() - spaceForTotal;
+
+          if (y + rowH > limit) break;
+
+          y = drawRow(list[i], y, fontSize, rowH);
+          i += 1;
+        }
+
+        if (i >= list.length) {
+          if (y + rowH > bottomY()) {
+            doc.addPage();
+            drawReportTitle();
+            y = doc.y;
+            doc
+              .font("NotoSC")
+              .fontSize(11)
+              .fillColor("#000")
+              .text(`${w.worker_code || ""}    ${w.worker_name || ""}`, x0, y);
+            y += 18;
+          }
+
+          y += 4;
+          y = drawWorkerTotal(w, y, fontSize, rowH);
+        }
+
+        firstPageForWorker = false;
+        isFirstWorker = false;
       }
-      while (totalRowsNeeded > Math.floor(available / rowH) - 1 && fontSize > 7) {
-        fontSize -= 1;
-      }
-
-      // Recompute after shrink
-      const maxRows = Math.floor(available / rowH) - 1;
-
-      // Table header
-      y = drawTableHeader(y, fontSize, rowH);
-
-      // Rows (truncate if still too many)
-      const list = w.rows || [];
-      const showList = list.slice(0, Math.max(0, maxRows));
-
-      showList.forEach((r) => {
-        y = drawRow(r, y, fontSize, rowH);
-      });
-
-      // If truncated, show note
-      if (list.length > showList.length) {
-        doc.font("NotoSC").fontSize(8).fillColor("#B00000");
-        doc.text(t(lang, `(More rows not shown: ${list.length - showList.length})`, `（未显示行数：${list.length - showList.length}）`), x0, y + 2, {
-          width: pageW,
-          align: "left",
-        });
-        doc.fillColor("#000");
-        y += 12;
-      }
-
-      // Total row
-      y += 4;
-      y = drawWorkerTotal(w, y, fontSize, rowH);
     };
 
     // Render
-    workers.forEach((w, idx) => renderWorkerOnePage(w, idx === 0));
+    workers.forEach((w, idx) => renderWorkerMultiPage(w, idx === 0));
 
     doc.end();
   } catch (err) {

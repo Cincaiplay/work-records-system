@@ -76,6 +76,22 @@ function getCurrentData() {
   return (filteredWorkers.length ? filteredWorkers : allWorkers) || [];
 }
 
+function normalizeDateForInput(v) {
+  if (!v) return "";
+  const s = String(v).trim();
+  if (s.includes("T")) return s.slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  return s;
+}
+
+function formatDateForTable(v) {
+  if (!v) return "-";
+  const s = String(v).trim();
+  if (s.includes("T")) return s.slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  return s;
+}
+
 function renderWorkersTable() {
   const tbody = document.getElementById("workersBody");
   const data = getCurrentData();
@@ -103,7 +119,7 @@ function renderWorkersTable() {
         <td>${w.worker_english_name || "-"}</td>
         <td>${w.passport_no || "-"}</td>
         <td>${w.nationality || "-"}</td>
-        <td>${w.employment_start || "-"}</td>
+        <td>${formatDateForTable(w.employment_start)}</td>
         <td>${w.wage_tier_name || "-"}</td>
         <td>${w.is_active ? "Yes" : "No"}</td>
         <td>${w.field1 || "-"}</td>
@@ -140,7 +156,7 @@ window.openEditModal = function (id) {
   document.getElementById("workerEnglishName").value = w.worker_english_name || "";
   document.getElementById("passportNo").value = w.passport_no || "";
   document.getElementById("nationality").value = w.nationality || "";
-  document.getElementById("employmentStart").value = w.employment_start || "";
+  document.getElementById("employmentStart").value = normalizeDateForInput(w.employment_start);
   document.getElementById("field1").value = w.field1 || "";
 
   // Active flag (NEW UI field)

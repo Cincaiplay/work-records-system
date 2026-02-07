@@ -1,6 +1,6 @@
 // public/js/importExport.js
 
-let currentImportType = null; // "workers" | "jobs"
+let currentImportType = null; // "workers" | "jobs" | "work_entries"
 let lastPreviewHadErrors = true;
 
 function getCompanyIdSafe() {
@@ -73,6 +73,28 @@ function setPreviewTableHeaders(type) {
     return;
   }
 
+  if (type === "work_entries") {
+    thead.innerHTML = `
+      <tr class="small text-uppercase">
+        <th style="width:70px;">Row</th>
+        <th style="width:90px;">Action</th>
+        <th>Date</th>
+        <th>Job No1</th>
+        <th>Job No2</th>
+        <th>Worker Code</th>
+        <th>Job Code</th>
+        <th class="text-end">Hours</th>
+        <th class="text-end">Fees</th>
+        <th>Pay Type</th>
+        <th class="text-end">Cust Rate</th>
+        <th class="text-end">Wage Rate</th>
+        <th>Note</th>
+        <th style="width:240px;">Error</th>
+      </tr>
+    `;
+    return;
+  }
+
   thead.innerHTML = "";
 }
 
@@ -110,6 +132,7 @@ window.openImportModal = function (type) {
   document.getElementById("importModalTitle").textContent =
     type === "workers" ? "Import Workers (CSV) - Preview" :
     type === "jobs" ? "Import Jobs (CSV) - Preview" :
+    type === "work_entries" ? "Import Work Entries (CSV) - Preview" :
     "Import Preview";
 
   // reset UI
@@ -147,6 +170,8 @@ window.previewImport = async function () {
       ? "/api/workers/import/preview"
       : currentImportType === "jobs"
       ? "/api/jobs/import/preview"
+      : currentImportType === "work_entries"
+      ? "/api/work-entries/import/preview"
       : null;
 
   if (!url) return alert("Unknown import type.");
@@ -224,6 +249,32 @@ window.previewImport = async function () {
       `;
       body.appendChild(tr);
     });
+  } else if (currentImportType === "work_entries") {
+    rows.forEach((r) => {
+      const action = String(r.action || "").toUpperCase();
+      const isError = action === "ERROR";
+
+      const tr = document.createElement("tr");
+      if (isError) tr.className = "table-danger";
+
+      tr.innerHTML = `
+        <td>${cell(r.row)}</td>
+        <td>${badge(r.action)}</td>
+        <td>${cell(r.work_date)}</td>
+        <td>${cell(r.job_no1)}</td>
+        <td>${cell(r.job_no2)}</td>
+        <td>${cell(r.worker_code)}</td>
+        <td>${cell(r.job_code)}</td>
+        <td class="text-end">${cell(r.hours)}</td>
+        <td class="text-end">${cell(r.fees_collected)}</td>
+        <td>${cell(r.pay_type)}</td>
+        <td class="text-end">${cell(r.customer_rate)}</td>
+        <td class="text-end">${cell(r.wage_rate)}</td>
+        <td>${cell(r.note)}</td>
+        <td class="text-danger small">${cell(r.error)}</td>
+      `;
+      body.appendChild(tr);
+    });
   }
 
   lastPreviewHadErrors = (t.errors ?? 0) > 0;
@@ -254,6 +305,8 @@ window.confirmImport = async function () {
       ? "/api/workers/import"
       : currentImportType === "jobs"
       ? "/api/jobs/import"
+      : currentImportType === "work_entries"
+      ? "/api/work-entries/import"
       : null;
 
   if (!url) return alert("Unknown import type.");
