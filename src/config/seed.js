@@ -125,7 +125,7 @@ async function seedPermissions() {
 
     ["REPORT_EXPORT_PDF", "Can export reports as PDF"],
     ["REPORT_EXPORT_EXCEL", "Can export reports as Excel"],
-    ["REPORT_FILTER_PAYTYPE", "Can filter reports by Cash/Bank"],
+    ["REPORT_RESTRICT_JOBNO2", "Restrict reports to Job No2 only"],
 
     ["USER_CREATE", "Can create users"],
     ["USER_EDIT", "Can edit users"],
@@ -237,7 +237,7 @@ async function seedRolePermissions() {
     "WORK_ENTRY_DELETE",
 
     "REPORT_EXPORT_PDF",
-    "REPORT_FILTER_PAYTYPE",
+    "REPORT_RESTRICT_JOBNO2",
 
     "USER_CREATE",
     "USER_EDIT",

@@ -58,6 +58,8 @@ function getPayTypeQuery() {
 
 // JobNo filter query
 function getJobNoQuery() {
+  const restrictJobNo2 = document.body?.dataset?.restrictJobno2 === "1";
+  if (restrictJobNo2) return "&jobno1=0&jobno2=1";
   const j1El = document.getElementById("filterJobNo1");
   const j2El = document.getElementById("filterJobNo2");
   if (!j1El || !j2El) return "";
@@ -76,6 +78,15 @@ function wireJobNoFilterRules() {
   const j1 = document.getElementById("filterJobNo1");
   const j2 = document.getElementById("filterJobNo2");
   if (!j1 || !j2) return;
+
+  const restrictJobNo2 = document.body?.dataset?.restrictJobno2 === "1";
+  if (restrictJobNo2) {
+    j1.checked = false;
+    j2.checked = true;
+    j1.disabled = true;
+    j2.disabled = true;
+    return;
+  }
 
   const normalize = () => {
     if (!j1.checked && !j2.checked) {
@@ -912,8 +923,29 @@ function exportWorkerPayslipPdf() {
    Boot
 ------------------------------ */
 document.addEventListener("DOMContentLoaded", () => {
+  // default date range to last month (start/end) if not already set
+  const startEl = document.getElementById("reportStartDate");
+  const endEl = document.getElementById("reportEndDate");
+  if (startEl && endEl && !startEl.value && !endEl.value) {
+    const now = new Date();
+    const startLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const endLastMonth = new Date(now.getFullYear(), now.getMonth(), 0);
+    const toLocalYMD = (d) => {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      return `${y}-${m}-${day}`;
+    };
+    startEl.value = toLocalYMD(startLastMonth);
+    endEl.value = toLocalYMD(endLastMonth);
+  }
+
   // ✅ Wire jobno filters (normalize only, NO auto preview)
   wireJobNoFilterRules();
+
+  const restrictJobNo2 = document.body?.dataset?.restrictJobno2 === "1";
+  const jobNoFilters = document.getElementById("jobNoFilters");
+  if (jobNoFilters && restrictJobNo2) jobNoFilters.style.display = "none";
 
   document.querySelectorAll(".report-btn").forEach((btn) => {
     btn.addEventListener("click", () => {

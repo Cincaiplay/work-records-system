@@ -161,10 +161,8 @@ function buildGroupedEntries(flatRows) {
   const groups = Array.from(map.values());
   groups.forEach(g => {
     const lines = Array.isArray(g.lines) ? g.lines : [];
-    g.__wageTotal = lines.reduce((s, x) => s + (Number(x.wage_total) || 0), 0);
-    g.__customerTotal = lines.reduce((s, x) => s + (Number(x.customer_total) || 0), 0);
-    const jobLabels = lines.map(x => `${x.job_code || ""} ${x.job_type || ""}`.trim()).filter(Boolean);
-    g.__jobKey = jobLabels.length ? jobLabels.sort()[0] : "";
+    g.__jobNoKey = String(g.header.job_no1 || "");
+    g.__workerKey = String(g.header.worker_code || "");
   });
 
   const sortType = currentSortType;
@@ -182,12 +180,10 @@ function buildGroupedEntries(flatRows) {
       switch (sortType) {
         case "date_asc": return (a.header.work_date || "").localeCompare(b.header.work_date || "");
         case "date_desc": return (b.header.work_date || "").localeCompare(a.header.work_date || "");
-        case "job_asc": return (a.__jobKey || "").localeCompare(b.__jobKey || "");
-        case "job_desc": return (b.__jobKey || "").localeCompare(a.__jobKey || "");
-        case "wage_asc": return (a.__wageTotal || 0) - (b.__wageTotal || 0);
-        case "wage_desc": return (b.__wageTotal || 0) - (a.__wageTotal || 0);
-        case "customer_asc": return (a.__customerTotal || 0) - (b.__customerTotal || 0);
-        case "customer_desc": return (b.__customerTotal || 0) - (a.__customerTotal || 0);
+        case "jobno_asc": return (a.__jobNoKey || "").localeCompare(b.__jobNoKey || "");
+        case "jobno_desc": return (b.__jobNoKey || "").localeCompare(a.__jobNoKey || "");
+        case "worker_asc": return (a.__workerKey || "").localeCompare(b.__workerKey || "");
+        case "worker_desc": return (b.__workerKey || "").localeCompare(a.__workerKey || "");
         default: return 0;
       }
     });

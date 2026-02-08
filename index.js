@@ -151,17 +151,15 @@ app.get("/records", requireAuth, requirePermission("PAGE_RECORDS"), (req, res) =
 
 app.get("/reports", requireAuth, requirePermission("PAGE_REPORTS"), async (req, res) => {
   const user = req.session?.user;
-  const userId = Number(user?.id);
-
-  let canFilterPayType = false;
+  let restrictJobNo2 = false;
   try {
-    canFilterPayType =
-      Number(user?.is_admin) === 1 ? true : await hasPermission(userId, "REPORT_FILTER_PAYTYPE");
+    restrictJobNo2 =
+      Number(user?.is_admin) === 1 ? false : await hasPermission(Number(user?.id), "REPORT_RESTRICT_JOBNO2");
   } catch (err) {
     console.error("permission check failed:", err);
   }
 
-  res.render("reports", { title: "Reports", canFilterPayType });
+  res.render("reports", { title: "Reports", canFilterPayType: true, restrictJobNo2 });
 });
 
 app.get("/403", (req, res) => {

@@ -14,30 +14,22 @@ const __dirname = path.dirname(__filename);
 router.use(requireAuth, requirePermission("PAGE_Reports"));
 
 /**
- * payFilter rules:
- * - If user has REPORT_FILTER_PAYTYPE (or is admin): allow bank/cash toggles from query
- * - Else: force BANK_ONLY and hide toggles on UI
+ * payFilter rules (everyone can filter):
+ * - cash=1 & bank=1 => BOTH
+ * - cash=1 & bank=0 => CASH_ONLY
+ * - cash=0 & bank=1 => BANK_ONLY
+ * - cash=0 & bank=0 => NONE
  */
 async function resolvePayFilter(req) {
-  const user = req.session?.user;
-  const userId = Number(user?.id);
+  const canFilterPayType = true;
+  const cash = Number(req.query.cash ?? 1) === 1;
+  const bank = Number(req.query.bank ?? 1) === 1;
 
-  const canFilterPayType =
-    Number(user?.is_admin) === 1
-      ? true
-      : await hasPermission(userId, "REPORT_FILTER_PAYTYPE");
-
-  let payFilter = "BANK_ONLY"; // default if no permission
-
-  if (canFilterPayType) {
-    const cash = Number(req.query.cash ?? 1) === 1;
-    const bank = Number(req.query.bank ?? 1) === 1;
-
-    if (cash && bank) payFilter = "BOTH";
-    else if (cash && !bank) payFilter = "CASH_ONLY";
-    else if (!cash && bank) payFilter = "BANK_ONLY";
-    else payFilter = "NONE";
-  }
+  let payFilter = "BOTH";
+  if (cash && bank) payFilter = "BOTH";
+  else if (cash && !bank) payFilter = "CASH_ONLY";
+  else if (!cash && bank) payFilter = "BANK_ONLY";
+  else payFilter = "NONE";
 
   return { canFilterPayType, payFilter };
 }
@@ -49,14 +41,32 @@ async function resolvePayFilter(req) {
  * - jobno1=1 & jobno2=0 => only rows that DO NOT HAVE job_no2
  * - jobno1=0 & jobno2=0 => ALL (fallback)
  */
-function resolveJobNoFilter(req) {
+async function shouldRestrictJobNo2(req) {
+  const user = req.session?.user;
+  const userId = Number(user?.id);
+  if (Number(user?.is_admin) === 1) return false;
+
+  const perms = Array.isArray(user?.permissions) ? user.permissions : [];
+  const set = new Set(perms.map((p) => String(p || "").toLowerCase()));
+  if (set.has("report_restrict_jobno2")) return true;
+
+  if (!userId) return false;
+  return await hasPermission(userId, "REPORT_RESTRICT_JOBNO2");
+}
+
+async function resolveJobNoFilter(req) {
+  const restrictJobNo2 = await shouldRestrictJobNo2(req);
+  if (restrictJobNo2) {
+    return { jobNoFilter: "HAS_JOBNO2", useJobNo2: true };
+  }
+
   const j1 = Number(req.query.jobno1 ?? 1) === 1;
   const j2 = Number(req.query.jobno2 ?? 1) === 1;
 
-  if (j1 && j2) return "ALL";
-  if (!j1 && j2) return "HAS_JOBNO2";
-  if (j1 && !j2) return "NO_JOBNO2";
-  return "ALL";
+  if (j1 && j2) return { jobNoFilter: "ALL", useJobNo2: false };
+  if (!j1 && j2) return { jobNoFilter: "HAS_JOBNO2", useJobNo2: true };
+  if (j1 && !j2) return { jobNoFilter: "NO_JOBNO2", useJobNo2: false };
+  return { jobNoFilter: "ALL", useJobNo2: false };
 }
 
 function resolveLang(req) {
@@ -298,7 +308,7 @@ router.get("/worker-monthly-pays", async (req, res) => {
     const lang = resolveLang(req);
 
     const { canFilterPayType, payFilter } = await resolvePayFilter(req);
-    const jobNoFilter = resolveJobNoFilter(req);
+    const { jobNoFilter } = await resolveJobNoFilter(req);
 
     if (!companyId || companyId <= 0) return res.status(400).json({ error: "Invalid companyId" });
     if (!isValidISODate(start) || !isValidISODate(end))
@@ -334,7 +344,7 @@ router.get("/worker-monthly-pays/pdf", async (req, res) => {
 
     const showVouchers = String(req.query.showVouchers || "") === "1";
     const { payFilter } = await resolvePayFilter(req);
-    const jobNoFilter = resolveJobNoFilter(req);
+    const { jobNoFilter } = await resolveJobNoFilter(req);
 
     if (!companyId || companyId <= 0) return res.status(400).send("Invalid companyId");
     if (!isValidISODate(start) || !isValidISODate(end))
@@ -626,14 +636,15 @@ router.get("/worker-monthly-pays/pdf", async (req, res) => {
 /* -----------------------------
    Sales Listing
 ------------------------------ */
-async function querySalesListing({ companyId, start, end, payFilter, jobNoFilter }) {
+async function querySalesListing({ companyId, start, end, payFilter, jobNoFilter, useJobNo2 }) {
   const paySql = payWhereSql(payFilter); // uses alias we
   const jobNoSql = jobNoWhereSql(jobNoFilter);
+  const billNoCol = useJobNo2 ? "we.job_no2" : "we.job_no1";
 
   const detailSql = `
     SELECT
       we.work_date AS work_date,
-      we.job_no1 AS bill_no,
+      ${billNoCol} AS bill_no,
       (j.job_code || ' - ' || COALESCE(j.job_type, '')) AS job_desc,
       COALESCE(wej.hours, 0) AS hours,
       COALESCE(wej.customer_total, 0) AS fee
@@ -647,8 +658,8 @@ async function querySalesListing({ companyId, start, end, payFilter, jobNoFilter
       ${jobNoSql}
     ORDER BY
       we.work_date,
-      NULLIF(we.job_no1,'')::int NULLS LAST,
-      we.job_no1
+      NULLIF(regexp_replace(COALESCE(${billNoCol},''), '\\D', '', 'g'), '')::int NULLS LAST,
+      ${billNoCol}
   `;
 
   const daySql = `
@@ -681,14 +692,14 @@ router.get("/sales-listing", async (req, res) => {
     const end = req.query.end;
 
     const { canFilterPayType, payFilter } = await resolvePayFilter(req);
-    const jobNoFilter = resolveJobNoFilter(req);
+    const { jobNoFilter, useJobNo2 } = await resolveJobNoFilter(req);
 
     if (!companyId || companyId <= 0) return res.status(400).json({ error: "Invalid companyId" });
     if (!isValidISODate(start) || !isValidISODate(end))
       return res.status(400).json({ error: "Invalid start/end date" });
     if (start > end) return res.status(400).json({ error: "Start date cannot be after end date" });
 
-    const data = await querySalesListing({ companyId, start, end, payFilter, jobNoFilter });
+    const data = await querySalesListing({ companyId, start, end, payFilter, jobNoFilter, useJobNo2 });
 
     res.json({
       canFilterPayType,
@@ -718,13 +729,13 @@ router.get("/sales-listing/pdf", async (req, res) => {
     const lang = resolveLang(req);
 
     const { payFilter } = await resolvePayFilter(req);
-    const jobNoFilter = resolveJobNoFilter(req);
+    const { jobNoFilter, useJobNo2 } = await resolveJobNoFilter(req);
 
     if (!companyId || companyId <= 0) return res.status(400).send("Invalid companyId");
     if (!isValidISODate(start) || !isValidISODate(end)) return res.status(400).send("Invalid start/end date");
     if (start > end) return res.status(400).send("Start date cannot be after end date");
 
-    const { rows, days } = await querySalesListing({ companyId, start, end, payFilter, jobNoFilter });
+    const { rows, days } = await querySalesListing({ companyId, start, end, payFilter, jobNoFilter, useJobNo2 });
 
     // ✅ Company name (dynamic title)
     let companyName = "";
@@ -859,9 +870,10 @@ router.get("/sales-listing/pdf", async (req, res) => {
 // Worker Job Listing (Postgres) + PDF 
 // =============================
 
-async function queryWorkerJobListing({ companyId, start, end, payFilter, jobNoFilter, workerIds }) {
+async function queryWorkerJobListing({ companyId, start, end, payFilter, jobNoFilter, workerIds, useJobNo2 }) {
   const paySql = payWhereSql(payFilter);           // must use alias "we"
   const jobNoSql = jobNoWhereSql(jobNoFilter);     // must use alias "we"
+  const billNoCol = useJobNo2 ? "we.job_no2" : "we.job_no1";
 
   const ids = Array.isArray(workerIds)
     ? workerIds.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0)
@@ -880,7 +892,7 @@ async function queryWorkerJobListing({ companyId, start, end, payFilter, jobNoFi
       COALESCE(w.worker_name, w.worker_english_name, '') AS worker_name,
 
       we.work_date::date AS work_date,
-      we.job_no1 AS bill_no,
+      ${billNoCol} AS bill_no,
       (COALESCE(j.job_code,'') || ' - ' || COALESCE(j.job_type,'')) AS job_desc,
 
       COALESCE(wej.hours, 0) AS hours,
@@ -900,8 +912,8 @@ async function queryWorkerJobListing({ companyId, start, end, payFilter, jobNoFi
       NULLIF(regexp_replace(COALESCE(w.worker_code,''), '\\D', '', 'g'), '')::int NULLS LAST,
       w.worker_code,
       we.work_date::date,
-      NULLIF(regexp_replace(COALESCE(we.job_no1,''), '\\D', '', 'g'), '')::int NULLS LAST,
-      we.job_no1,
+      NULLIF(regexp_replace(COALESCE(${billNoCol},''), '\\D', '', 'g'), '')::int NULLS LAST,
+      ${billNoCol},
       COALESCE(j.job_code,''),
       COALESCE(j.job_type,'')
   `;
@@ -917,7 +929,7 @@ router.get("/account-worker-job-listing", async (req, res) => {
     const end = req.query.end;
 
     const { canFilterPayType, payFilter } = await resolvePayFilter(req);
-    const jobNoFilter = resolveJobNoFilter(req);
+    const { jobNoFilter, useJobNo2 } = await resolveJobNoFilter(req);
     const workerIds = parseWorkerIdsFromQuery(req);
 
     if (!companyId || companyId <= 0) return res.status(400).json({ error: "Invalid companyId" });
@@ -925,7 +937,15 @@ router.get("/account-worker-job-listing", async (req, res) => {
       return res.status(400).json({ error: "Invalid start/end date (use YYYY-MM-DD)" });
     if (start > end) return res.status(400).json({ error: "Start date cannot be after end date" });
 
-    const rows = await queryWorkerJobListing({ companyId, start, end, payFilter, jobNoFilter, workerIds });
+    const rows = await queryWorkerJobListing({
+      companyId,
+      start,
+      end,
+      payFilter,
+      jobNoFilter,
+      workerIds,
+      useJobNo2,
+    });
 
     
 
@@ -978,14 +998,22 @@ router.get("/account-worker-job-listing/pdf", async (req, res) => {
     const lang = resolveLang(req);
 
     const { payFilter } = await resolvePayFilter(req);
-    const jobNoFilter = resolveJobNoFilter(req);
+    const { jobNoFilter, useJobNo2 } = await resolveJobNoFilter(req);
     const workerIds = parseWorkerIdsFromQuery(req);
 
     if (!companyId || companyId <= 0) return res.status(400).send("Invalid companyId");
     if (!isValidISODate(start) || !isValidISODate(end)) return res.status(400).send("Invalid start/end date");
     if (start > end) return res.status(400).send("Start date cannot be after end date");
 
-    const rows = await queryWorkerJobListing({ companyId, start, end, payFilter, jobNoFilter, workerIds });
+    const rows = await queryWorkerJobListing({
+      companyId,
+      start,
+      end,
+      payFilter,
+      jobNoFilter,
+      workerIds,
+      useJobNo2,
+    });
 
     // ✅ Company name (dynamic title)
     let companyName = "";
@@ -1250,7 +1278,7 @@ router.get("/monthly-summary", async (req, res) => {
     const end = req.query.end;
 
     const { canFilterPayType, payFilter } = await resolvePayFilter(req);
-    const jobNoFilter = resolveJobNoFilter(req);
+    const { jobNoFilter } = await resolveJobNoFilter(req);
 
     if (!companyId || companyId <= 0) return res.status(400).json({ error: "Invalid companyId" });
     if (!isValidISODate(start) || !isValidISODate(end))
@@ -1326,7 +1354,7 @@ router.get("/monthly-summary/pdf", async (req, res) => {
     const lang = resolveLang(req);
 
     const { payFilter } = await resolvePayFilter(req);
-    const jobNoFilter = resolveJobNoFilter(req);
+    const { jobNoFilter } = await resolveJobNoFilter(req);
 
     if (!companyId || companyId <= 0) return res.status(400).send("Invalid companyId");
     if (!isValidISODate(start) || !isValidISODate(end))
@@ -1594,7 +1622,7 @@ router.get("/worker-payslip", async (req, res) => {
     const end = req.query.end;
 
     const { canFilterPayType, payFilter } = await resolvePayFilter(req);
-    const jobNoFilter = resolveJobNoFilter(req);
+    const { jobNoFilter } = await resolveJobNoFilter(req);
 
     if (!companyId || companyId <= 0) return res.status(400).json({ error: "Invalid companyId" });
     if (!workerId || workerId <= 0) return res.status(400).json({ error: "Please select a worker." });
@@ -1656,7 +1684,7 @@ router.get("/worker-payslip/pdf", async (req, res) => {
     const workerIds = parseWorkerIdsFromQuery(req);
 
     const { payFilter } = await resolvePayFilter(req);
-    const jobNoFilter = resolveJobNoFilter(req);
+    const { jobNoFilter } = await resolveJobNoFilter(req);
 
     if (!companyId || companyId <= 0) return res.status(400).send("Invalid companyId");
     if (!workerIds.length) return res.status(400).send("Please select at least one worker.");
