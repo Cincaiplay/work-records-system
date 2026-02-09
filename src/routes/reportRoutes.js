@@ -647,7 +647,11 @@ async function querySalesListing({ companyId, start, end, payFilter, jobNoFilter
       ${billNoCol} AS bill_no,
       (j.job_code || ' - ' || COALESCE(j.job_type, '')) AS job_desc,
       COALESCE(wej.hours, 0) AS hours,
-      COALESCE(wej.customer_total, 0) AS fee
+      CASE
+        WHEN ROW_NUMBER() OVER (PARTITION BY we.id ORDER BY wej.id) = 1
+          THEN COALESCE(we.fees_collected, 0)
+        ELSE 0
+      END AS fee
     FROM work_entries we
     JOIN work_entry_jobs wej ON wej.work_entry_id = we.id
     ${jobsLeftJoinSql()}
@@ -664,17 +668,24 @@ async function querySalesListing({ companyId, start, end, payFilter, jobNoFilter
 
   const daySql = `
     SELECT
-      we.work_date AS work_date,
-      SUM(COALESCE(wej.customer_total, 0)) AS daily_sales
-    FROM work_entries we
-    JOIN work_entry_jobs wej ON wej.work_entry_id = we.id
-    WHERE we.company_id = $1
-      AND we.work_date >= $2::date
-      AND we.work_date <= $3::date
-      ${paySql}
-      ${jobNoSql}
-    GROUP BY we.work_date
-    ORDER BY we.work_date
+      x.work_date AS work_date,
+      SUM(x.fees_collected) AS daily_sales
+    FROM (
+      SELECT
+        we.id,
+        we.work_date,
+        COALESCE(we.fees_collected, 0) AS fees_collected
+      FROM work_entries we
+      JOIN work_entry_jobs wej ON wej.work_entry_id = we.id
+      WHERE we.company_id = $1
+        AND we.work_date >= $2::date
+        AND we.work_date <= $3::date
+        ${paySql}
+        ${jobNoSql}
+      GROUP BY we.id, we.work_date, we.fees_collected
+    ) x
+    GROUP BY x.work_date
+    ORDER BY x.work_date
   `;
 
   const [detail, days] = await Promise.all([
