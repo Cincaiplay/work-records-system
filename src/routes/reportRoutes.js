@@ -259,40 +259,44 @@ async function queryWorkerMonthlyPays({ companyId, start, end, payFilter, jobNoF
   // Safer numeric sort: if worker_code isn't a pure number, it won't crash
   const orderSql = `
     ORDER BY
-      NULLIF(regexp_replace(w.worker_code, '\\D', '', 'g'), '')::int NULLS LAST,
-      w.worker_code
+      NULLIF(regexp_replace(worker_code, '\\D', '', 'g'), '')::int NULLS LAST,
+      worker_code
   `;
 
   const sql = `
+    WITH entry AS (
+      SELECT
+        we.id AS work_entry_id,
+        w.worker_code AS worker_code,
+        COALESCE(w.worker_name, w.worker_english_name, '') AS worker_name,
+        COALESCE(we.is_bank, 0) AS is_bank,
+        COALESCE(we.fees_collected, 0) AS fees_collected,
+        SUM(COALESCE(wej.hours, 0)) AS total_hours,
+        SUM(COALESCE(wej.wage_total, wej.pay, 0)) AS total_wage
+      ${baseFromJoinSql()}
+      WHERE we.company_id = $1
+        AND we.work_date >= $2::date
+        AND we.work_date <= $3::date
+        ${paySql}
+        ${jobNoSql}
+      GROUP BY
+        we.id,
+        w.worker_code,
+        w.worker_name,
+        w.worker_english_name,
+        we.is_bank,
+        we.fees_collected
+    )
     SELECT
-      w.worker_code AS worker_code,
-      COALESCE(w.worker_name, w.worker_english_name, '') AS worker_name,
-
-      SUM(COALESCE(wej.hours, 0)) AS total_hours,
-      SUM(COALESCE(wej.customer_total, 0)) AS total_customer,
-      SUM(COALESCE(wej.wage_total, wej.pay, 0)) AS total_wage,
-
-      SUM(
-        CASE WHEN COALESCE(we.is_bank,0) = 0
-          THEN COALESCE(wej.wage_total, wej.pay, 0)
-          ELSE 0
-        END
-      ) AS cash_wage,
-
-      SUM(
-        CASE WHEN COALESCE(we.is_bank,0) = 1
-          THEN COALESCE(wej.wage_total, wej.pay, 0)
-          ELSE 0
-        END
-      ) AS bank_wage
-
-    ${baseFromJoinSql()}
-    WHERE we.company_id = $1
-      AND we.work_date >= $2::date
-      AND we.work_date <= $3::date
-      ${paySql}
-      ${jobNoSql}
-    GROUP BY w.worker_code, w.worker_name, w.worker_english_name
+      worker_code,
+      worker_name,
+      SUM(total_hours) AS total_hours,
+      SUM(fees_collected) AS total_customer,
+      SUM(total_wage) AS total_wage,
+      SUM(CASE WHEN is_bank = 0 THEN total_wage ELSE 0 END) AS cash_wage,
+      SUM(CASE WHEN is_bank = 1 THEN total_wage ELSE 0 END) AS bank_wage
+    FROM entry
+    GROUP BY worker_code, worker_name
     ${orderSql}
   `;
 
@@ -907,7 +911,11 @@ async function queryWorkerJobListing({ companyId, start, end, payFilter, jobNoFi
       (COALESCE(j.job_code,'') || ' - ' || COALESCE(j.job_type,'')) AS job_desc,
 
       COALESCE(wej.hours, 0) AS hours,
-      COALESCE(wej.customer_total, 0) AS fee,
+      CASE
+        WHEN ROW_NUMBER() OVER (PARTITION BY we.id ORDER BY wej.id) = 1
+          THEN COALESCE(we.fees_collected, 0)
+        ELSE 0
+      END AS fee,
       COALESCE(wej.wage_total, wej.pay, 0) AS wage
     FROM work_entries we
     JOIN workers w ON w.id = we.worker_id AND w.company_id = we.company_id
@@ -1256,26 +1264,40 @@ async function queryMonthlySummary({ companyId, start, end, payFilter, jobNoFilt
 
   const sql = `
     SELECT
-      to_char(we.work_date::date, 'YYYY-MM') AS ym,
+      x.ym AS ym,
 
-      SUM(CASE WHEN COALESCE(we.is_bank,0) = 1 THEN COALESCE(wej.customer_total,0) ELSE 0 END) AS bank_fee,
-      SUM(CASE WHEN COALESCE(we.is_bank,0) = 0 THEN COALESCE(wej.customer_total,0) ELSE 0 END) AS cash_fee,
-      SUM(COALESCE(wej.customer_total,0)) AS total_fee,
+      SUM(CASE WHEN x.is_bank = 1 THEN x.fees_collected ELSE 0 END) AS bank_fee,
+      SUM(CASE WHEN x.is_bank = 0 THEN x.fees_collected ELSE 0 END) AS cash_fee,
+      SUM(x.fees_collected) AS total_fee,
 
-      SUM(CASE WHEN COALESCE(we.is_bank,0) = 1 THEN COALESCE(wej.wage_total, wej.pay, 0) ELSE 0 END) AS bank_wage,
-      SUM(CASE WHEN COALESCE(we.is_bank,0) = 0 THEN COALESCE(wej.wage_total, wej.pay, 0) ELSE 0 END) AS cash_wage,
-      SUM(COALESCE(wej.wage_total, wej.pay, 0)) AS total_wage,
+      SUM(CASE WHEN x.is_bank = 1 THEN x.total_wage ELSE 0 END) AS bank_wage,
+      SUM(CASE WHEN x.is_bank = 0 THEN x.total_wage ELSE 0 END) AS cash_wage,
+      SUM(x.total_wage) AS total_wage,
 
-      SUM(COALESCE(wej.hours,0)) AS total_hours
-    FROM work_entries we
-    JOIN work_entry_jobs wej ON wej.work_entry_id = we.id
-    WHERE we.company_id = $1
-      AND we.work_date::date >= $2::date
-      AND we.work_date::date <= $3::date
-      ${paySql}
-      ${jobNoSql}
-    GROUP BY to_char(we.work_date::date, 'YYYY-MM')
-    ORDER BY to_char(we.work_date::date, 'YYYY-MM')
+      SUM(x.total_hours) AS total_hours
+    FROM (
+      SELECT
+        we.id AS work_entry_id,
+        to_char(we.work_date::date, 'YYYY-MM') AS ym,
+        COALESCE(we.is_bank, 0) AS is_bank,
+        COALESCE(we.fees_collected, 0) AS fees_collected,
+        SUM(COALESCE(wej.wage_total, wej.pay, 0)) AS total_wage,
+        SUM(COALESCE(wej.hours, 0)) AS total_hours
+      FROM work_entries we
+      JOIN work_entry_jobs wej ON wej.work_entry_id = we.id
+      WHERE we.company_id = $1
+        AND we.work_date::date >= $2::date
+        AND we.work_date::date <= $3::date
+        ${paySql}
+        ${jobNoSql}
+      GROUP BY
+        we.id,
+        to_char(we.work_date::date, 'YYYY-MM'),
+        we.is_bank,
+        we.fees_collected
+    ) x
+    GROUP BY x.ym
+    ORDER BY x.ym
   `;
 
   const r = await db.query(sql, [companyId, start, end]);
@@ -1595,30 +1617,48 @@ async function queryWorkerPayslipLinesGrouped({
   const jobNoSql = jobNoWhereSql(jobNoFilter); // uses alias we
 
   const sql = `
+    WITH line AS (
+      SELECT
+        wej.job_id AS job_id,
+        COALESCE(j.job_code, '') AS job_code,
+        COALESCE(j.job_type, '') AS job_type,
+        COALESCE(wej.hours, 0) AS hours,
+        COALESCE(wej.customer_total, 0) AS customer_total,
+        COALESCE(wej.wage_total, wej.pay, 0) AS wage,
+        COALESCE(we.fees_collected, 0) AS fees_collected,
+        SUM(COALESCE(wej.customer_total, 0)) OVER (PARTITION BY we.id) AS entry_customer_total
+      FROM work_entries we
+      JOIN work_entry_jobs wej ON wej.work_entry_id = we.id
+      LEFT JOIN jobs j ON j.id = wej.job_id AND j.company_id = we.company_id
+      WHERE we.company_id = $1
+        AND we.worker_id = $2
+        AND we.work_date::date >= $3::date
+        AND we.work_date::date <= $4::date
+        ${paySql}
+        ${jobNoSql}
+    )
     SELECT
-      wej.job_id AS job_id,
-      COALESCE(j.job_code, '') AS job_code,
-      COALESCE(j.job_type, '') AS job_type,
-      SUM(COALESCE(wej.hours, 0)) AS hours,
-      SUM(COALESCE(wej.customer_total, 0)) AS fee,
-      SUM(COALESCE(wej.wage_total, wej.pay, 0)) AS wage
-    FROM work_entries we
-    JOIN work_entry_jobs wej ON wej.work_entry_id = we.id
-    LEFT JOIN jobs j ON j.id = wej.job_id AND j.company_id = we.company_id
-    WHERE we.company_id = $1
-      AND we.worker_id = $2
-      AND we.work_date::date >= $3::date
-      AND we.work_date::date <= $4::date
-      ${paySql}
-      ${jobNoSql}
+      job_id,
+      job_code,
+      job_type,
+      SUM(hours) AS hours,
+      SUM(
+        CASE
+          WHEN entry_customer_total > 0
+            THEN fees_collected * (customer_total / entry_customer_total)
+          ELSE 0
+        END
+      ) AS fee,
+      SUM(wage) AS wage
+    FROM line
     GROUP BY
-      wej.job_id,
-      j.job_code,
-      j.job_type
+      job_id,
+      job_code,
+      job_type
     ORDER BY
-      COALESCE(j.job_code,''),
-      COALESCE(j.job_type,''),
-      COALESCE(wej.job_id, 0)
+      COALESCE(job_code,''),
+      COALESCE(job_type,''),
+      COALESCE(job_id, 0)
   `;
 
   const r = await db.query(sql, [companyId, workerId, start, end]);
