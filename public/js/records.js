@@ -6,6 +6,7 @@ let recordsPage = 1;
 let recordsPageSize = 10;
 let recordsFilterActive = false;
 let currentSortType = null;
+let selectedRecordIds = new Set();
 
 let jobsCache = [];      // [{id, job_code, job_type, customer_rate, wage_rates:[...]}]
 let tiersCache = [];     // [{id, tier_name}]
@@ -360,15 +361,13 @@ function loadRecords(options = {}) {
       });
 
       recordsCache = flat;
+      const validIds = new Set(recordsCache.map(r => Number(r.id)).filter(n => Number.isFinite(n)));
+      selectedRecordIds = new Set([...selectedRecordIds].filter(id => validIds.has(id)));
       filteredRecords = [];
       recordsPage = preservePage ? Math.max(1, desiredPage || 1) : 1;
 
       if (recordsFilterActive) applyRecordFilters({ preservePage });
       else renderRecordsTable();
-
-      document.querySelectorAll(".record-select").forEach(cb => {
-        cb.addEventListener("change", syncHeaderCheckbox);
-      });
 
       syncHeaderCheckbox();
     })
@@ -519,7 +518,7 @@ function renderRecordsTable() {
       tr.className = "record-single";
       tr.innerHTML = `
         <td class="text-center">
-          <input type="checkbox" class="record-select" value="${e.id}">
+          <input type="checkbox" class="record-select" value="${e.id}" ${selectedRecordIds.has(Number(e.id)) ? "checked" : ""}>
         </td>
         <td>${start + idx + 1}</td>
         <td>${formatDateDMY(h.work_date)}</td>
@@ -595,7 +594,7 @@ function renderRecordsTable() {
       trChild.dataset.group = parentId;
       trChild.innerHTML = `
         <td class="text-center">
-          <input type="checkbox" class="record-select" value="${e.id}">
+          <input type="checkbox" class="record-select" value="${e.id}" ${selectedRecordIds.has(Number(e.id)) ? "checked" : ""}>
         </td>
         <td></td><td></td><td></td><td></td><td></td>
         <td class="child-job">${groupJobLabel(e)}</td>
@@ -621,6 +620,15 @@ function renderRecordsTable() {
   if (wageTotalCell) wageTotalCell.textContent = grandWage.toFixed(2);
   if (customerTotalCell) customerTotalCell.textContent = grandCustomer.toFixed(2);
 
+  document.querySelectorAll(".record-select").forEach(cb => {
+    cb.addEventListener("change", () => {
+      const id = Number(cb.value);
+      if (cb.checked) selectedRecordIds.add(id);
+      else selectedRecordIds.delete(id);
+      syncHeaderCheckbox();
+    });
+  });
+
   bindParentCheckboxes();
   bindGroupToggles();
   syncHeaderCheckbox();
@@ -634,7 +642,12 @@ function bindParentCheckboxes() {
       const group = parentCb.dataset.group;
       document
         .querySelectorAll(`.record-child[data-group="${group}"] .record-select`)
-        .forEach(cb => cb.checked = parentCb.checked);
+        .forEach(cb => {
+          cb.checked = parentCb.checked;
+          const id = Number(cb.value);
+          if (parentCb.checked) selectedRecordIds.add(id);
+          else selectedRecordIds.delete(id);
+        });
       syncHeaderCheckbox();
     });
   });
@@ -732,9 +745,7 @@ function renderRecordsPaginationSingle(elementId, totalPages) {
 
 // ---------- selection / header checkbox ----------
 function getSelectedRecordIds() {
-  return Array.from(document.querySelectorAll(".record-select:checked"))
-    .map(cb => parseInt(cb.value, 10))
-    .filter(n => Number.isFinite(n));
+  return [...selectedRecordIds].filter(n => Number.isFinite(n));
 }
 
 function syncHeaderCheckbox() {
@@ -770,6 +781,17 @@ function syncHeaderCheckbox() {
   }
 
   deleteBtn.disabled = checked.length === 0;
+  updateDeleteSelectedButton();
+}
+
+function updateDeleteSelectedButton() {
+  const btn = document.getElementById("deleteSelectedBtn");
+  if (!btn) return;
+  const count = selectedRecordIds.size;
+  btn.disabled = count === 0;
+  btn.innerHTML = count === 0
+    ? `<i class="bi bi-trash"></i> Delete Selected`
+    : `<i class="bi bi-trash"></i> Delete Selected (${count})`;
 }
 
 async function deleteSelectedRecords() {
@@ -790,6 +812,7 @@ async function deleteSelectedRecords() {
         fetch(`/api/work-entries/${id}?companyId=${companyId}`, { method: "DELETE" })
       )
     );
+    selectedRecordIds.clear();
     loadRecords();
   } catch (err) {
     console.error(err);
@@ -1233,7 +1256,12 @@ document.addEventListener("DOMContentLoaded", () => {
     const checked = this.checked;
     Array.from(document.querySelectorAll(".record-select:not(:disabled)"))
       .filter(cb => isRowVisible(cb.closest("tr")))
-      .forEach(cb => { cb.checked = checked; });
+      .forEach(cb => {
+        cb.checked = checked;
+        const id = Number(cb.value);
+        if (checked) selectedRecordIds.add(id);
+        else selectedRecordIds.delete(id);
+      });
 
     syncHeaderCheckbox();
   });
