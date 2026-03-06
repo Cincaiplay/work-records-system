@@ -813,8 +813,9 @@ function applyRecordFilters(options = {}) {
   const jobVal = (document.getElementById("filterJob")?.value || "").toLowerCase().trim();
   const noteVal = (document.getElementById("filterNote")?.value || "").toLowerCase().trim();
   const mismatchOnly = document.getElementById("filterMismatchTotals")?.checked === true;
+  const payTypeVal = (document.getElementById("filterPayType")?.value || "").toLowerCase().trim();
 
-  recordsFilterActive = !!(dateFrom || dateTo || jobNoVal || workerVal || jobVal || noteVal || mismatchOnly);
+  recordsFilterActive = !!(dateFrom || dateTo || jobNoVal || workerVal || jobVal || noteVal || mismatchOnly || payTypeVal);
 
   let mismatchSet = null;
   if (mismatchOnly) {
@@ -865,6 +866,12 @@ function applyRecordFilters(options = {}) {
 
     if (jobVal && !jobText.includes(jobVal)) return false;
     if (noteVal && !noteText.includes(noteVal)) return false;
+    if (payTypeVal) {
+      const isBank = Number(e.is_bank) === 1;
+      if (payTypeVal === "bank" && !isBank) return false;
+      if (payTypeVal === "cash" && isBank) return false;
+    }
+
     if (mismatchOnly) {
       const id = Number(e.work_entry_id);
       if (!Number.isFinite(id) || !mismatchSet?.has(id)) return false;
@@ -1213,7 +1220,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  ["filterDateFrom", "filterDateTo", "filterJobNo", "filterWorker", "filterJob", "filterNote"]
+  ["filterDateFrom", "filterDateTo", "filterJobNo", "filterWorker", "filterJob", "filterNote", "filterPayType"]
     .forEach(id => {
       const el = document.getElementById(id);
       if (el) el.addEventListener("input", applyRecordFilters);
@@ -1260,6 +1267,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const worker = (document.getElementById("filterWorker")?.value || "").trim();
     const job = (document.getElementById("filterJob")?.value || "").trim();
     const note = (document.getElementById("filterNote")?.value || "").trim();
+    const payType = (document.getElementById("filterPayType")?.value || "").trim();
 
     if (dateFrom) params.set("dateFrom", dateFrom);
     if (dateTo) params.set("dateTo", dateTo);
@@ -1267,6 +1275,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (worker) params.set("worker", worker);
     if (job) params.set("job", job);
     if (note) params.set("note", note);
+    if (payType) params.set("payType", payType);
 
     window.open(`/api/work-entries/export?${params.toString()}`, "_blank");
   });

@@ -1266,13 +1266,21 @@ async function queryMonthlySummary({ companyId, start, end, payFilter, jobNoFilt
     SELECT
       x.ym AS ym,
 
-      SUM(CASE WHEN x.is_bank = 1 THEN x.fees_collected ELSE 0 END) AS bank_fee,
-      SUM(CASE WHEN x.is_bank = 0 THEN x.fees_collected ELSE 0 END) AS cash_fee,
-      SUM(x.fees_collected) AS total_fee,
+      -- Fee columns remapped:
+      -- bank_fee   => Total Sales (all fees collected)
+      -- cash_fee   => Bank Sales (has job_no2)
+      -- total_fee  => Cash Sales (no job_no2)
+      SUM(x.fees_collected) AS bank_fee,
+      SUM(CASE WHEN x.has_jobno2 = 1 THEN x.fees_collected ELSE 0 END) AS cash_fee,
+      SUM(CASE WHEN x.has_jobno2 = 0 THEN x.fees_collected ELSE 0 END) AS total_fee,
 
-      SUM(CASE WHEN x.is_bank = 1 THEN x.total_wage ELSE 0 END) AS bank_wage,
-      SUM(CASE WHEN x.is_bank = 0 THEN x.total_wage ELSE 0 END) AS cash_wage,
-      SUM(x.total_wage) AS total_wage,
+      -- Wage columns remapped:
+      -- bank_wage   => Total Wages (all wages)
+      -- cash_wage   => Bank Wages (has job_no2)
+      -- total_wage  => Cash Wages (no job_no2)
+      SUM(x.total_wage) AS bank_wage,
+      SUM(CASE WHEN x.has_jobno2 = 1 THEN x.total_wage ELSE 0 END) AS cash_wage,
+      SUM(CASE WHEN x.has_jobno2 = 0 THEN x.total_wage ELSE 0 END) AS total_wage,
 
       SUM(x.total_hours) AS total_hours
     FROM (
@@ -1280,6 +1288,10 @@ async function queryMonthlySummary({ companyId, start, end, payFilter, jobNoFilt
         we.id AS work_entry_id,
         to_char(we.work_date::date, 'YYYY-MM') AS ym,
         COALESCE(we.is_bank, 0) AS is_bank,
+        CASE
+          WHEN TRIM(COALESCE(we.job_no2, '')) <> '' THEN 1
+          ELSE 0
+        END AS has_jobno2,
         COALESCE(we.fees_collected, 0) AS fees_collected,
         SUM(COALESCE(wej.wage_total, wej.pay, 0)) AS total_wage,
         SUM(COALESCE(wej.hours, 0)) AS total_hours
@@ -1294,6 +1306,7 @@ async function queryMonthlySummary({ companyId, start, end, payFilter, jobNoFilt
         we.id,
         to_char(we.work_date::date, 'YYYY-MM'),
         we.is_bank,
+        we.job_no2,
         we.fees_collected
     ) x
     GROUP BY x.ym
@@ -1532,13 +1545,13 @@ router.get("/monthly-summary/pdf", async (req, res) => {
       doc.fontSize(9).fillColor("#000");
       let x = x0;
       doc.text(t(lang, "Month", "月份"), x, y, { width: col.month }); x += col.month;
-      doc.text(t(lang, "Bank Fees", "银行户口"), x, y, { width: col.bankFee, align: "right" }); x += col.bankFee;
-      doc.text(t(lang, "Cash Fees", "现金户口"), x, y, { width: col.cashFee, align: "right" }); x += col.cashFee;
-      doc.text(t(lang, "Total Fees", "总收费"), x, y, { width: col.totalFee, align: "right" }); x += col.totalFee;
+      doc.text(t(lang, "Total Sales", "总销售"), x, y, { width: col.bankFee, align: "right" }); x += col.bankFee;
+      doc.text(t(lang, "Bank Sales", "银行销售"), x, y, { width: col.cashFee, align: "right" }); x += col.cashFee;
+      doc.text(t(lang, "Cash Sales", "现金销售"), x, y, { width: col.totalFee, align: "right" }); x += col.totalFee;
 
-      doc.text(t(lang, "Bank Wages", "银行工资"), x, y, { width: col.bankWage, align: "right" }); x += col.bankWage;
-      doc.text(t(lang, "Cash Wages", "现金工资"), x, y, { width: col.cashWage, align: "right" }); x += col.cashWage;
-      doc.text(t(lang, "Total Wages", "总工资"), x, y, { width: col.totalWage, align: "right" }); x += col.totalWage;
+      doc.text(t(lang, "Total Wages", "总工资"), x, y, { width: col.bankWage, align: "right" }); x += col.bankWage;
+      doc.text(t(lang, "Bank Wages", "银行工资"), x, y, { width: col.cashWage, align: "right" }); x += col.cashWage;
+      doc.text(t(lang, "Cash Wages", "现金工资"), x, y, { width: col.totalWage, align: "right" }); x += col.totalWage;
 
 
       y += rowH;
@@ -1663,6 +1676,35 @@ async function queryWorkerPayslipLinesGrouped({
 
   const r = await db.query(sql, [companyId, workerId, start, end]);
   return r.rows || [];
+}
+
+async function queryWorkerPayslipJobNo2WageTotal({
+  companyId,
+  workerId,
+  start,
+  end,
+  payFilter,
+  jobNoFilter,
+}) {
+  const paySql = payWhereSql(payFilter);       // uses alias we
+  const jobNoSql = jobNoWhereSql(jobNoFilter); // uses alias we
+
+  const sql = `
+    SELECT
+      SUM(COALESCE(wej.wage_total, wej.pay, 0)) AS total_wage
+    FROM work_entries we
+    JOIN work_entry_jobs wej ON wej.work_entry_id = we.id
+    WHERE we.company_id = $1
+      AND we.worker_id = $2
+      AND we.work_date::date >= $3::date
+      AND we.work_date::date <= $4::date
+      AND TRIM(COALESCE(we.job_no2,'')) <> ''
+      ${paySql}
+      ${jobNoSql}
+  `;
+
+  const r = await db.query(sql, [companyId, workerId, start, end]);
+  return num(r.rows?.[0]?.total_wage);
 }
 
 router.get("/worker-payslip", async (req, res) => {
@@ -1823,6 +1865,15 @@ router.get("/worker-payslip/pdf", async (req, res) => {
         { total_hours: 0, total_fee: 0, total_wage: 0 }
       );
 
+      const jobNo2WageTotal = await queryWorkerPayslipJobNo2WageTotal({
+        companyId,
+        workerId,
+        start,
+        end,
+        payFilter,
+        jobNoFilter,
+      });
+
       if (!isFirstPage) doc.addPage();
 
       // ===== Header =====
@@ -1961,7 +2012,7 @@ router.get("/worker-payslip/pdf", async (req, res) => {
         width: leftW,
         align: "left",
       });
-      doc.text(t(lang, `amounting to RM ${fmt2(totals.total_wage)}`, `金额：RM ${fmt2(totals.total_wage)}`), leftX, blockY + 28, {
+      doc.text(t(lang, `amounting to RM ${fmt2(jobNo2WageTotal)}`, `金额：RM ${fmt2(jobNo2WageTotal)}`), leftX, blockY + 28, {
         width: leftW,
         align: "left",
       });

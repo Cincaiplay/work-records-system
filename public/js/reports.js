@@ -748,15 +748,15 @@ function renderMonthlySummaryHtml(rows, totals) {
       <table class="table table-sm align-middle">
         <thead class="table-light">
           <tr>
-            <th>月份</th>
+            <th>Month 月份</th>
 
-            <th class="text-end">收费 银行户口</th>
-            <th class="text-end">收费 现金户口</th>
-            <th class="text-end">收费 总收费</th>
+            <th class="text-end">Total Sales 总销售</th>
+            <th class="text-end">Bank Sales 银行销售</th>
+            <th class="text-end">Cash Sales 现金销售</th>
 
-            <th class="text-end">工资 银行工资</th>
-            <th class="text-end">工资 现金工资</th>
-            <th class="text-end">工资 总工资</th>
+            <th class="text-end">Total Wages 总工资</th>
+            <th class="text-end">Bank Wages 银行工资</th>
+            <th class="text-end">Cash Wages 现金工资</th>
           </tr>
         </thead>
         <tbody>
