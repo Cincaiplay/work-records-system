@@ -666,7 +666,7 @@ async function querySalesListing({ companyId, start, end, payFilter, jobNoFilter
       ${jobNoSql}
     ORDER BY
       we.work_date,
-      NULLIF(regexp_replace(COALESCE(${billNoCol},''), '\\D', '', 'g'), '')::int NULLS LAST,
+      NULLIF(regexp_replace(COALESCE(${billNoCol},''), '\\D', '', 'g'), '')::bigint NULLS LAST,
       ${billNoCol}
   `;
 
@@ -931,7 +931,7 @@ async function queryWorkerJobListing({ companyId, start, end, payFilter, jobNoFi
       NULLIF(regexp_replace(COALESCE(w.worker_code,''), '\\D', '', 'g'), '')::int NULLS LAST,
       w.worker_code,
       we.work_date::date,
-      NULLIF(regexp_replace(COALESCE(${billNoCol},''), '\\D', '', 'g'), '')::int NULLS LAST,
+      NULLIF(regexp_replace(COALESCE(${billNoCol},''), '\\D', '', 'g'), '')::bigint NULLS LAST,
       ${billNoCol},
       COALESCE(j.job_code,''),
       COALESCE(j.job_type,'')
