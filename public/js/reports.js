@@ -1,5 +1,10 @@
 // public/js/reports.js
 let selectedReport = null;
+const t = (key, vars = {}) => window.AppI18n?.t(key, vars) ?? key;
+const applyTranslations = () => window.AppI18n?.apply?.();
+const initLangSwitch = () => window.AppI18n?.initLangSwitch?.();
+const onLangChange = (cb) => window.AppI18n?.onChange?.(cb);
+const getLang = () => window.AppI18n?.getLang?.() || "en";
 
 // read permission flag from <body data-can-filter-paytype="1|0">
 window.CAN_FILTER_PAYTYPE = document.body?.dataset?.canFilterPaytype === "1";
@@ -144,9 +149,9 @@ function updateWorkerPickerButtonText() {
     (o) => o.selected && String(o.value || "").trim()
   );
 
-  if (selectedOpts.length === 0) return (btn.textContent = "Select worker(s)");
-  if (selectedOpts.length === 1) return (btn.textContent = selectedOpts[0].text.trim() || "1 worker selected");
-  btn.textContent = `${selectedOpts.length} workers selected`;
+  if (selectedOpts.length === 0) return (btn.textContent = t("reports.workerPicker.select"));
+  if (selectedOpts.length === 1) return (btn.textContent = selectedOpts[0].text.trim() || t("reports.workerPicker.selectedOne"));
+  btn.textContent = t("reports.workerPicker.selectedMany", { count: selectedOpts.length });
 }
 
 function renderWorkerPickerList() {
@@ -167,7 +172,7 @@ function renderWorkerPickerList() {
   });
 
   if (!opts.length) {
-    listEl.innerHTML = `<div class="text-muted small">No workers found.</div>`;
+    listEl.innerHTML = `<div class="text-muted small">${t("reports.noData")}</div>`;
     updateWorkerPickerButtonText();
     return;
   }
@@ -211,7 +216,7 @@ function initWorkerMultiSelectDropdown() {
   btn.className = "btn btn-outline-secondary w-100 text-start dropdown-toggle";
   btn.setAttribute("data-bs-toggle", "dropdown");
   btn.setAttribute("aria-expanded", "false");
-  btn.textContent = "Select worker(s)";
+  btn.textContent = t("reports.workerPicker.select");
 
   const menu = document.createElement("div");
   menu.id = "workerPickerMenu";
@@ -297,7 +302,7 @@ async function loadWorkersIntoSelect() {
   const data = await res.json().catch(() => ({}));
 
   const list = Array.isArray(data) ? data : (data.workers || data.rows || []);
-  sel.innerHTML = `<option value="">-- Select Worker --</option>`;
+  sel.innerHTML = `<option value="">${t("reports.filters.workerPlaceholder")}</option>`;
 
   list.forEach((w) => {
     const id = w.id;
@@ -385,15 +390,23 @@ function selectReport(key, label) {
   const contentEl = document.getElementById("reportContent");
 
   if (titleEl) titleEl.textContent = label;
-  if (subEl) subEl.textContent = "Select date range, preview, or export PDF.";
+  if (subEl) subEl.textContent = t("reports.selectedSubtitle");
   if (controlsEl) controlsEl.style.display = "";
 
   setDefaultDates();
 
   if (contentEl) {
     contentEl.innerHTML =
-      `<div class="text-muted small">Click <strong>Preview</strong> to generate the report.</div>`;
+      `<div class="text-muted small">${t("reports.selectedHint")}</div>`;
   }
+}
+
+function syncReportLangToUi() {
+  const sel = document.getElementById("reportLang");
+  if (!sel) return;
+  const lang = getLang();
+  if (lang === "zh") sel.value = "zh";
+  else sel.value = "en";
 }
 
 function monthLabel(ym) {
@@ -415,7 +428,7 @@ function fmt(n) {
 
 function renderWorkerMonthlyPaysTable(rows, meta) {
   if (!rows || rows.length === 0)
-    return `<div class="text-muted">No data found for selected date range.</div>`;
+    return `<div class="text-muted">${t("reports.noData")}</div>`;
 
   const totalHours = rows.reduce((s, r) => s + Number(r.total_hours || 0), 0);
   const totalCustomer = rows.reduce((s, r) => s + Number(r.total_customer || 0), 0);
@@ -482,7 +495,7 @@ function renderWorkerMonthlyPaysTable(rows, meta) {
 function renderSalesListingHtml(data, meta) {
   const rows = data?.rows || [];
   const days = data?.days || [];
-  if (!rows.length) return `<div class="text-muted">No data found for selected date range.</div>`;
+  if (!rows.length) return `<div class="text-muted">${t("reports.noData")}</div>`;
 
   const byDate = new Map();
   rows.forEach((r) => {
@@ -540,7 +553,7 @@ function renderSalesListingHtml(data, meta) {
 
 function renderWorkerJobListingHtml(data, meta) {
   const workers = data?.workers || [];
-  if (!workers.length) return `<div class="text-muted">No data found for selected date range.</div>`;
+  if (!workers.length) return `<div class="text-muted">${t("reports.noData")}</div>`;
 
   let html = `
     <div class="mb-3">
@@ -606,17 +619,17 @@ async function previewWorkerMonthlyPays() {
   const companyId = getCompanyIdSafe();
   const startDate = document.getElementById("reportStartDate")?.value || "";
   const endDate = document.getElementById("reportEndDate")?.value || "";
-  if (!startDate || !endDate) return alert("Please select start and end date.");
+  if (!startDate || !endDate) return alert(t("reports.err.selectDates"));
 
   document.getElementById("reportContent").innerHTML =
-    `<div class="text-muted small">Loading...</div>`;
+    `<div class="text-muted small">${t("reports.loading")}</div>`;
 
   const qs = getPayTypeQuery() + getJobNoQuery();
   const url = `/api/reports/worker-monthly-pays?companyId=${companyId}&start=${startDate}&end=${endDate}${qs}`;
 
   const res = await fetch(url);
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) return alert(data?.error || "Failed to generate report.");
+  if (!res.ok) return alert(data?.error || t("reports.err.failed"));
 
   document.getElementById("reportContent").innerHTML =
     renderWorkerMonthlyPaysTable(data.rows || [], { startDate, endDate });
@@ -626,7 +639,7 @@ function exportWorkerMonthlyPaysPdf() {
   const companyId = getCompanyIdSafe();
   const startDate = document.getElementById("reportStartDate")?.value || "";
   const endDate = document.getElementById("reportEndDate")?.value || "";
-  if (!startDate || !endDate) return alert("Please select start and end date.");
+  if (!startDate || !endDate) return alert(t("reports.err.selectDates"));
 
   const workerIds = getSelectedWorkerIds();
   const wq = workerIds.length ? buildWorkerIdsQueryParam(workerIds) : "";
@@ -641,17 +654,17 @@ async function previewSalesListing() {
   const companyId = getCompanyIdSafe();
   const startDate = document.getElementById("reportStartDate")?.value || "";
   const endDate = document.getElementById("reportEndDate")?.value || "";
-  if (!startDate || !endDate) return alert("Please select start and end date.");
+  if (!startDate || !endDate) return alert(t("reports.err.selectDates"));
 
   document.getElementById("reportContent").innerHTML =
-    `<div class="text-muted small">Loading...</div>`;
+    `<div class="text-muted small">${t("reports.loading")}</div>`;
 
   const qs = getPayTypeQuery() + getJobNoQuery();
   const url = `/api/reports/sales-listing?companyId=${companyId}&start=${startDate}&end=${endDate}${qs}`;
 
   const res = await fetch(url);
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) return alert(data?.error || "Failed to generate report.");
+  if (!res.ok) return alert(data?.error || t("reports.err.failed"));
 
   document.getElementById("reportContent").innerHTML =
     renderSalesListingHtml(data, { startDate, endDate });
@@ -661,7 +674,7 @@ function exportSalesListingPdf() {
   const companyId = getCompanyIdSafe();
   const startDate = document.getElementById("reportStartDate")?.value || "";
   const endDate = document.getElementById("reportEndDate")?.value || "";
-  if (!startDate || !endDate) return alert("Please select start and end date.");
+  if (!startDate || !endDate) return alert(t("reports.err.selectDates"));
 
   const qs = getPayTypeQuery() + getJobNoQuery() + getLangQuery();
   window.open(
@@ -674,10 +687,10 @@ async function previewWorkerJobListing() {
   const companyId = getCompanyIdSafe();
   const startDate = document.getElementById("reportStartDate")?.value || "";
   const endDate = document.getElementById("reportEndDate")?.value || "";
-  if (!startDate || !endDate) return alert("Please select start and end date.");
+  if (!startDate || !endDate) return alert(t("reports.err.selectDates"));
 
   document.getElementById("reportContent").innerHTML =
-    `<div class="text-muted small">Loading...</div>`;
+    `<div class="text-muted small">${t("reports.loading")}</div>`;
 
   const workerIds = getSelectedWorkerIds();
   const wq = workerIds.length ? buildWorkerIdsQueryParam(workerIds) : "";
@@ -686,7 +699,7 @@ async function previewWorkerJobListing() {
 
   const res = await fetch(url);
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) return alert(data?.error || "Failed to generate report.");
+  if (!res.ok) return alert(data?.error || t("reports.err.failed"));
 
   document.getElementById("reportContent").innerHTML =
     renderWorkerJobListingHtml(data, { startDate, endDate });
@@ -696,7 +709,7 @@ function exportWorkerJobListingPdf() {
   const companyId = getCompanyIdSafe();
   const startDate = document.getElementById("reportStartDate")?.value || "";
   const endDate = document.getElementById("reportEndDate")?.value || "";
-  if (!startDate || !endDate) return alert("Please select start and end date.");
+  if (!startDate || !endDate) return alert(t("reports.err.selectDates"));
 
   const workerIds = getSelectedWorkerIds();
   const wq = workerIds.length ? buildWorkerIdsQueryParam(workerIds) : "";
@@ -709,7 +722,7 @@ function exportWorkerJobListingPdf() {
 
 function renderMonthlySummaryHtml(rows, totals) {
   if (!rows || rows.length === 0) {
-    return `<div class="text-muted">No data found for selected date range.</div>`;
+    return `<div class="text-muted">${t("reports.noData")}</div>`;
   }
 
   const t = totals || {};
@@ -772,10 +785,10 @@ async function previewMonthlySummary() {
   const companyId = getCompanyIdSafe();
   const startDate = document.getElementById("reportStartDate")?.value || "";
   const endDate = document.getElementById("reportEndDate")?.value || "";
-  if (!startDate || !endDate) return alert("Please select start and end date.");
+  if (!startDate || !endDate) return alert(t("reports.err.selectDates"));
 
   const contentEl = document.getElementById("reportContent");
-  if (contentEl) contentEl.innerHTML = `<div class="text-muted small">Loading...</div>`;
+  if (contentEl) contentEl.innerHTML = `<div class="text-muted small">${t("reports.loading")}</div>`;
 
   const qs = getPayTypeQuery() + getJobNoQuery();
   const url = `/api/reports/monthly-summary?companyId=${companyId}&start=${startDate}&end=${endDate}${qs}`;
@@ -783,7 +796,7 @@ async function previewMonthlySummary() {
   const res = await fetch(url);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    if (contentEl) contentEl.innerHTML = `<div class="text-danger">${data?.error || "Failed to load report"}</div>`;
+    if (contentEl) contentEl.innerHTML = `<div class="text-danger">${data?.error || t("reports.err.failed")}</div>`;
     return;
   }
 
@@ -797,7 +810,7 @@ function exportMonthlySummaryPdf() {
   const companyId = getCompanyIdSafe();
   const startDate = document.getElementById("reportStartDate")?.value || "";
   const endDate = document.getElementById("reportEndDate")?.value || "";
-  if (!startDate || !endDate) return alert("Please select start and end date.");
+  if (!startDate || !endDate) return alert(t("reports.err.selectDates"));
 
   const qs = getPayTypeQuery() + getJobNoQuery() + getLangQuery();
   window.open(
@@ -812,11 +825,11 @@ async function previewWorkerPayslip() {
   const startDate = document.getElementById("reportStartDate")?.value || "";
   const endDate = document.getElementById("reportEndDate")?.value || "";
 
-  if (!workerIds.length) return alert("Please select at least one worker.");
-  if (!startDate || !endDate) return alert("Please select start and end date.");
+  if (!workerIds.length) return alert(t("reports.err.selectWorker"));
+  if (!startDate || !endDate) return alert(t("reports.err.selectDates"));
 
   document.getElementById("reportContent").innerHTML =
-    `<div class="text-muted small">Loading...</div>`;
+    `<div class="text-muted small">${t("reports.loading")}</div>`;
 
   const qs = getPayTypeQuery() + getJobNoQuery();
 
@@ -833,7 +846,7 @@ async function previewWorkerPayslip() {
 
     if (!res.ok) {
       html += `<div class="text-danger mb-3">
-        Failed to load worker ID ${workerId}
+        ${t("reports.err.loadWorker", { id: workerId })}
       </div>`;
       continue;
     }
@@ -902,8 +915,8 @@ function exportWorkerPayslipPdf() {
   const startDate = document.getElementById("reportStartDate")?.value || "";
   const endDate = document.getElementById("reportEndDate")?.value || "";
 
-  if (!workerIds.length) return alert("Please select worker(s).");
-  if (!startDate || !endDate) return alert("Please select start and end date.");
+  if (!workerIds.length) return alert(t("reports.err.selectWorker"));
+  if (!startDate || !endDate) return alert(t("reports.err.selectDates"));
 
   const qs = getPayTypeQuery() + getJobNoQuery() + getLangQuery();
   const wq = buildWorkerIdsQueryParam(workerIds);
@@ -923,6 +936,23 @@ function exportWorkerPayslipPdf() {
    Boot
 ------------------------------ */
 document.addEventListener("DOMContentLoaded", () => {
+  applyTranslations();
+  initLangSwitch();
+  syncReportLangToUi();
+  onLangChange(() => {
+    applyTranslations();
+    syncReportLangToUi();
+    updateWorkerPickerButtonText();
+    if (selectedReport) {
+      const btn = document.querySelector(`.report-btn[data-report="${selectedReport}"]`);
+      const label = btn?.textContent?.trim() || "";
+      const titleEl = document.getElementById("reportTitle");
+      if (titleEl && label) titleEl.textContent = label;
+      const subEl = document.getElementById("reportSubtitle");
+      if (subEl) subEl.textContent = t("reports.selectedSubtitle");
+    }
+  });
+
   // default date range to last month (start/end) if not already set
   const startEl = document.getElementById("reportStartDate");
   const endEl = document.getElementById("reportEndDate");
@@ -962,7 +992,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (selectedReport === "account-worker-job-listing") return previewWorkerJobListing();
     if (selectedReport === "monthly-summary") return previewMonthlySummary();
     if (selectedReport === "worker-payslip") return previewWorkerPayslip();
-    alert("This report is not implemented yet.");
+    alert(t("reports.err.failed"));
   });
 
   document.getElementById("btnPdf")?.addEventListener("click", () => {
@@ -971,7 +1001,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (selectedReport === "account-worker-job-listing") return exportWorkerJobListingPdf();
     if (selectedReport === "monthly-summary") return exportMonthlySummaryPdf();
     if (selectedReport === "worker-payslip") return exportWorkerPayslipPdf();
-    alert("This report is not implemented yet.");
+    alert(t("reports.err.failed"));
   });
 
 

@@ -5,8 +5,18 @@ let filteredCompanies = [];
 let companyPage = 1;
 const companyPageSize = 10;
 let companyModal = null;
+const t = (key, vars = {}) => window.AppI18n?.t(key, vars) ?? key;
+const applyTranslations = () => window.AppI18n?.apply?.();
+const initLangSwitch = () => window.AppI18n?.initLangSwitch?.();
+const onLangChange = (cb) => window.AppI18n?.onChange?.(cb);
 
 document.addEventListener("DOMContentLoaded", () => {
+  applyTranslations();
+  initLangSwitch();
+  onLangChange(() => {
+    renderCompanyTable();
+  });
+
   const modalEl = document.getElementById("companyModal");
   companyModal = new bootstrap.Modal(modalEl);
 
@@ -67,7 +77,7 @@ function renderCompanyTable() {
   if (pageItems.length === 0) {
     tbody.innerHTML = `
       <tr>
-        <td colspan="5" class="text-center text-muted py-4">No companies found.</td>
+        <td colspan="5" class="text-center text-muted py-4">${t("companies.noCompanies")}</td>
       </tr>`;
   } else {
     pageItems.forEach(c => {
@@ -78,8 +88,8 @@ function renderCompanyTable() {
         <td>${c.address || "-"}</td>
         <td>${c.phone || "-"}</td>
         <td class="text-end">
-          <button class="btn btn-sm btn-outline-primary me-2" onclick="openEditCompany(${c.id})">Edit</button>
-          <button class="btn btn-sm btn-outline-danger" onclick="deleteCompany(${c.id})">Delete</button>
+          <button class="btn btn-sm btn-outline-primary me-2" onclick="openEditCompany(${c.id})">${t("companies.edit")}</button>
+          <button class="btn btn-sm btn-outline-danger" onclick="deleteCompany(${c.id})">${t("companies.delete")}</button>
         </td>
       `;
       tbody.appendChild(tr);
@@ -87,7 +97,9 @@ function renderCompanyTable() {
   }
 
   const end = start + pageItems.length;
-  const text = total ? `Showing ${start + 1}-${end} of ${total} companies` : "No companies";
+  const text = total
+    ? t("companies.showing", { start: start + 1, end, total })
+    : t("companies.none");
 
   document.getElementById("companiesCountTop").textContent = text;
   document.getElementById("companiesCountBottom").textContent = text;
@@ -149,18 +161,19 @@ async function loadCompanyRulesIntoModal(companyId) {
   if (!box) return;
 
   box.innerHTML = `<div class="text-muted small">Loading rules...</div>`;
+  box.innerHTML = `<div class="text-muted small">${t("companies.rulesLoading")}</div>`;
 
   try {
     const res = await fetch(`/api/companies/${companyId}/rules`);
     if (!res.ok) {
-      box.innerHTML = `<div class="text-danger small">Failed to load rules (HTTP ${res.status}).</div>`;
+      box.innerHTML = `<div class="text-danger small">${t("companies.rulesLoadFailed", { status: res.status })}</div>`;
       return;
     }
 
     const rules = await res.json();
 
     if (!Array.isArray(rules)) {
-      box.innerHTML = `<div class="text-danger small">Rules API returned invalid data.</div>`;
+      box.innerHTML = `<div class="text-danger small">${t("companies.rulesInvalid")}</div>`;
       return;
     }
 
@@ -183,7 +196,7 @@ async function loadCompanyRulesIntoModal(companyId) {
     }).join("");
   } catch (err) {
     console.error("loadCompanyRulesIntoModal error:", err);
-    box.innerHTML = `<div class="text-danger small">Error loading rules.</div>`;
+    box.innerHTML = `<div class="text-danger small">${t("companies.rulesLoadError")}</div>`;
   }
 }
 
@@ -211,7 +224,7 @@ window.openCreateCompany = function () {
 
   const box = document.getElementById("companyRulesBox");
   if (box) {
-    box.innerHTML = `<div class="text-muted small">Save company first, then edit rules.</div>`;
+    box.innerHTML = `<div class="text-muted small">${t("companies.rulesSaveFirst")}</div>`;
   }
 
   companyModal.show();
@@ -231,7 +244,7 @@ window.saveCompany = async function () {
   };
 
   if (!payload.name) {
-    alert("Company name is required.");
+    alert(t("companies.alert.nameRequired"));
     return;
   }
 
@@ -248,14 +261,14 @@ window.saveCompany = async function () {
 
     const data = await res.json();
     if (!res.ok) {
-      alert(data?.error || "Error saving company.");
+      alert(data?.error || t("companies.alert.saveError"));
       return;
     }
 
     // ✅ Use correct companyId for rules
     const companyId = isEdit ? parseInt(idRaw, 10) : data.id;
     if (!companyId) {
-      alert("Saved company but missing company id response.");
+      alert(t("companies.alert.missingId"));
       return;
     }
 
@@ -270,7 +283,7 @@ window.saveCompany = async function () {
     }
   } catch (err) {
     console.error("saveCompany error:", err);
-    alert("Error saving company.");
+    alert(t("companies.alert.saveError"));
   }
 };
 
@@ -290,7 +303,7 @@ async function saveCompanyRules(companyId) {
 }
 
 window.deleteCompany = function (id) {
-  if (!confirm("Delete this company?")) return;
+  if (!confirm(t("companies.alert.deleteConfirm"))) return;
 
   fetch(`/api/companies/${id}`, { method: "DELETE" })
     .then(res => res.json())
@@ -304,6 +317,6 @@ window.deleteCompany = function (id) {
     })
     .catch(err => {
       console.error("deleteCompany error:", err);
-      alert("Error deleting company.");
+      alert(t("companies.alert.deleteError"));
     });
 };

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title><%= title %></title>
+  <title data-i18n="workers.pageTitle"><%= title %></title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
@@ -18,12 +18,12 @@
     <!-- Header -->
     <div class="d-flex justify-content-between align-items-center mb-4 pb-2 border-bottom">
       <h1 class="fw-bold text-primary display-6">
-        <i class="bi bi-people-fill me-2"></i> Worker Directory
+        <i class="bi bi-people-fill me-2"></i> <span data-i18n="workers.title">Worker Directory</span>
       </h1>
       <button type="button"
               class="btn btn-lg btn-success shadow-sm rounded-pill px-4"
               onclick="openCreateModal()">
-        <i class="bi bi-plus-lg me-1"></i> Register New Worker
+        <i class="bi bi-plus-lg me-1"></i> <span data-i18n="workers.register">Register New Worker</span>
       </button>
     </div>
 
@@ -39,6 +39,7 @@
             id="searchWorker"
             class="form-control border-0 py-2"
             placeholder="Search by name, worker code, or passport number..."
+            data-i18n-placeholder="workers.searchPlaceholder"
           />
         </div>
       </div>
@@ -62,19 +63,19 @@
           <button class="btn btn-outline-secondary rounded-pill"
                   type="button"
                   onclick="downloadTemplate('workers')">
-            <i class="bi bi-download"></i> CSV Template
+            <i class="bi bi-download"></i> <span data-i18n="workers.csvTemplate">CSV Template</span>
           </button>
 
           <button class="btn btn-outline-primary rounded-pill"
                   type="button"
                   onclick="openImportModal('workers')">
-            <i class="bi bi-upload"></i> Import CSV
+            <i class="bi bi-upload"></i> <span data-i18n="workers.importCsv">Import CSV</span>
           </button>
 
           <button class="btn btn-outline-success rounded-pill"
                   type="button"
                   onclick="window.exportCsv('workers')">
-            <i class="bi bi-download"></i> Export
+            <i class="bi bi-download"></i> <span data-i18n="workers.export">Export</span>
           </button>
 
         </div>
@@ -97,16 +98,16 @@
           <table class="table table-hover mb-0" id="workersTable">
             <thead class="table-primary text-uppercase small">
                 <tr>
-                    <th scope="col">Code</th>
-                    <th scope="col">Name</th>
-                    <th scope="col">English Name</th>
-                    <th scope="col">Passport No</th>
-                    <th scope="col">Nationality</th>
-                    <th scope="col">Start Date</th>
-                    <th scope="col">Wage Tier</th>
-                    <th scope="col">Active</th>
-                    <th scope="col">Note</th>
-                    <th scope="col" class="text-end">Actions</th>
+                    <th scope="col" data-i18n="workers.table.code">Code</th>
+                    <th scope="col" data-i18n="workers.table.name">Name</th>
+                    <th scope="col" data-i18n="workers.table.englishName">English Name</th>
+                    <th scope="col" data-i18n="workers.table.passport">Passport No</th>
+                    <th scope="col" data-i18n="workers.table.nationality">Nationality</th>
+                    <th scope="col" data-i18n="workers.table.startDate">Start Date</th>
+                    <th scope="col" data-i18n="workers.table.wageTier">Wage Tier</th>
+                    <th scope="col" data-i18n="workers.table.active">Active</th>
+                    <th scope="col" data-i18n="workers.table.note">Note</th>
+                    <th scope="col" class="text-end" data-i18n="workers.table.actions">Actions</th>
                 </tr>
             </thead>
 
@@ -118,7 +119,7 @@
                   <div class="spinner-border spinner-border-sm me-2 text-primary" role="status">
                     <span class="visually-hidden">Loading...</span>
                   </div>
-                  Loading worker data...
+                  <span data-i18n="workers.loading">Loading worker data...</span>
                 </td>
               </tr>
             </tbody>
@@ -142,7 +143,7 @@
     <div class="modal-dialog modal-xl">
       <div class="modal-content rounded-3">
         <div class="modal-header">
-          <h5 class="modal-title" id="workerModalTitle">Worker</h5>
+          <h5 class="modal-title" id="workerModalTitle" data-i18n="workers.modal.title">Worker</h5>
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
 
@@ -153,51 +154,51 @@
             <!-- Basic info -->
             <div class="row g-3">
               <div class="col-md-3">
-                <label class="form-label">Code</label>
+                <label class="form-label" data-i18n="workers.field.code">Code</label>
                 <input type="text" id="workerCode" class="form-control" />
               </div>
 
               <div class="col-md-4">
-                <label class="form-label">Name</label>
+                <label class="form-label" data-i18n="workers.field.name">Name</label>
                 <input type="text" id="workerName" class="form-control" />
               </div>
 
               <div class="col-md-5">
-                <label class="form-label">English Name</label>
+                <label class="form-label" data-i18n="workers.field.englishName">English Name</label>
                 <input type="text" id="workerEnglishName" class="form-control" />
               </div>
 
               <div class="col-md-4">
-                <label class="form-label">Passport No</label>
+                <label class="form-label" data-i18n="workers.field.passport">Passport No</label>
                 <input type="text" id="passportNo" class="form-control" />
               </div>
 
               <div class="col-md-4">
-                <label class="form-label">Nationality</label>
+                <label class="form-label" data-i18n="workers.field.nationality">Nationality</label>
                 <input type="text" id="nationality" class="form-control" />
               </div>
 
               <div class="col-md-4">
-                <label class="form-label">Start Date</label>
-                <input type="text" id="employmentStart" class="form-control" placeholder="e.g. 6/1/2018" />
+                <label class="form-label" data-i18n="workers.field.startDate">Start Date</label>
+                <input type="text" id="employmentStart" class="form-control" placeholder="e.g. 6/1/2018" data-i18n-placeholder="workers.field.startDatePlaceholder" />
               </div>
 
               <div class="col-md-4">
-                <label class="form-label">Active</label>
+                <label class="form-label" data-i18n="workers.field.active">Active</label>
                 <select id="isActive" class="form-select">
-                  <option value="1" selected>Yes (Active)</option>
-                  <option value="0">No (Inactive)</option>
+                  <option value="1" selected data-i18n="workers.activeYes">Yes (Active)</option>
+                  <option value="0" data-i18n="workers.activeNo">No (Inactive)</option>
                 </select>
-                <div class="form-text">Inactive workers can be hidden from normal operations.</div>
+                <div class="form-text" data-i18n="workers.activeHelp">Inactive workers can be hidden from normal operations.</div>
               </div>
 
               <div class="col-md-4">
-                <label class="form-label">Wage Tier</label>
+                <label class="form-label" data-i18n="workers.field.wageTier">Wage Tier</label>
                 <select id="wageTierId" class="form-select"></select>
               </div>
 
               <div class="col-md-8">
-                <label class="form-label">Note</label>
+                <label class="form-label" data-i18n="workers.field.note">Note</label>
                 <input type="text" id="field1" class="form-control" />
               </div>
             </div>
@@ -205,11 +206,11 @@
         </div>
 
         <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" data-i18n="workers.cancel">
             Cancel
           </button>
           <button type="button" class="btn btn-primary" onclick="saveWorker()">
-            Save Changes
+            <span data-i18n="workers.save">Save Changes</span>
           </button>
         </div>
 
@@ -225,6 +226,7 @@
   <!-- Scripts -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="/js/importExport.js"></script>
+  <script src="/js/i18n.js"></script>
   <script src="/js/company-switcher.js"></script>
   <script src="/js/workers.js"></script>
 </body>

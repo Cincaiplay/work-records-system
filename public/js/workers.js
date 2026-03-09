@@ -7,6 +7,11 @@ let currentPage = 1;
 const pageSize = 10;
 let workerModal;
 
+const t = (key, vars = {}) => window.AppI18n?.t(key, vars) ?? key;
+const applyTranslations = () => window.AppI18n?.apply?.();
+const initLangSwitch = () => window.AppI18n?.initLangSwitch?.();
+const onLangChange = (cb) => window.AppI18n?.onChange?.(cb);
+
 
 const companyId =
   (typeof window.getCurrentCompanyId === "function" ? window.getCurrentCompanyId() : null)
@@ -18,6 +23,12 @@ if (!companyId) {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
+  applyTranslations();
+  initLangSwitch();
+  onLangChange(() => {
+    renderWorkersTable();
+  });
+
   const modalEl = document.getElementById("workerModal");
   workerModal = new bootstrap.Modal(modalEl);
 
@@ -108,10 +119,11 @@ function renderWorkersTable() {
   if (!pageItems.length) {
     tbody.innerHTML = `
       <tr>
-        <td colspan="10" class="text-center text-muted py-4">No workers found.</td>
+        <td colspan="10" class="text-center text-muted py-4">${t("workers.noWorkers")}</td>
       </tr>`;
   } else {
     pageItems.forEach(w => {
+      const isActiveLabel = w.is_active ? t("workers.value.activeYes") : t("workers.value.activeNo");
       const row = document.createElement("tr");
       row.innerHTML = `
         <td>${w.worker_code}</td>
@@ -121,11 +133,11 @@ function renderWorkersTable() {
         <td>${w.nationality || "-"}</td>
         <td>${formatDateForTable(w.employment_start)}</td>
         <td>${w.wage_tier_name || "-"}</td>
-        <td>${w.is_active ? "Yes" : "No"}</td>
+        <td>${isActiveLabel}</td>
         <td>${w.field1 || "-"}</td>
         <td class="text-end">
-          <button class="btn btn-sm btn-outline-primary me-2" onclick="openEditModal(${w.id})">Edit</button>
-          <button class="btn btn-sm btn-outline-danger" onclick="deleteWorker(${w.id})">Delete</button>
+          <button class="btn btn-sm btn-outline-primary me-2" onclick="openEditModal(${w.id})">${t("workers.edit")}</button>
+          <button class="btn btn-sm btn-outline-danger" onclick="deleteWorker(${w.id})">${t("workers.delete")}</button>
         </td>
       `;
       tbody.appendChild(row);
@@ -133,7 +145,9 @@ function renderWorkersTable() {
   }
 
   const end = start + pageItems.length;
-  const text = total ? `Showing ${start + 1}-${end} of ${total} workers` : "No workers";
+  const text = total
+    ? t("workers.showing", { start: start + 1, end, total })
+    : t("workers.none");
 
   document.getElementById("workersCountTop").textContent = text;
   document.getElementById("workersCountBottom").textContent = text;
@@ -201,7 +215,7 @@ window.saveWorker = function () {
 
 
   if (!payload.worker_code) {
-    alert("Worker code is required.");
+    alert(t("workers.alert.codeRequired"));
     return;
   }
 
@@ -220,7 +234,7 @@ window.saveWorker = function () {
     })
     .catch(err => {
       console.error(err);
-      alert("Error saving worker.");
+      alert(t("workers.alert.saveError"));
     });
 };
 
@@ -289,7 +303,7 @@ window.deleteWorker = async function (id) {
   const w = allWorkers.find(x => x.id === id);
   const label = w ? `${w.worker_code}${w.worker_name ? " - " + w.worker_name : ""}` : `ID ${id}`;
 
-  if (!confirm(`Are you sure you want to delete worker: ${label}?`)) return;
+  if (!confirm(t("workers.alert.deleteConfirm", { label }))) return;
 
   try {
     const res = await fetch(`/api/workers/${id}?companyId=${companyId}`, {
@@ -299,7 +313,7 @@ window.deleteWorker = async function (id) {
     const data = await res.json();
 
     if (!res.ok) {
-      alert(data?.error || "Failed to delete worker.");
+      alert(data?.error || t("workers.alert.deleteFailed"));
       return;
     }
 
@@ -307,6 +321,6 @@ window.deleteWorker = async function (id) {
     loadWorkers();
   } catch (err) {
     console.error("deleteWorker error:", err);
-    alert("Error deleting worker.");
+    alert(t("workers.alert.deleteError"));
   }
 };

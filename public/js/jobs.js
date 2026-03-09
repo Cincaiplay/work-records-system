@@ -3,6 +3,10 @@ let wageTiers = [];
 let currentPage = 1;
 const pageSize = 10;
 let jobModal;
+const t = (key, vars = {}) => window.AppI18n?.t(key, vars) ?? key;
+const applyTranslations = () => window.AppI18n?.apply?.();
+const initLangSwitch = () => window.AppI18n?.initLangSwitch?.();
+const onLangChange = (cb) => window.AppI18n?.onChange?.(cb);
 
 const companyId = getCurrentCompanyId() || 1;
 
@@ -10,6 +14,13 @@ const companyId = getCurrentCompanyId() || 1;
 let selectedJobIds = new Set();
 
 document.addEventListener("DOMContentLoaded", async () => {
+  applyTranslations();
+  initLangSwitch();
+  onLangChange(() => {
+    buildTableHeader();
+    renderTable();
+  });
+
   jobModal = new bootstrap.Modal(document.getElementById("jobModal"));
 
   const search = document.getElementById("searchJobCode");
@@ -55,11 +66,11 @@ function buildTableHeader() {
     <th style="width: 42px;" class="text-center">
       <input class="form-check-input" type="checkbox" id="selectAllJobs" />
     </th>
-    <th>Code</th>
-    <th>Job Type</th>
-    <th>Normal</th>
+    <th>${t("jobs.table.code")}</th>
+    <th>${t("jobs.table.type")}</th>
+    <th>${t("jobs.table.normal")}</th>
     ${wageTiers.map(t => `<th>${escapeHtml(t.tier_name)}</th>`).join("")}
-    <th class="text-end">Actions</th>
+    <th class="text-end">${t("jobs.table.actions")}</th>
   `;
 
   // re-bind select-all because we replaced the header HTML
@@ -98,7 +109,7 @@ function renderTable() {
   if (!page.length) {
     tbody.innerHTML = `
       <tr>
-        <td colspan="${colCount}" class="text-center text-muted py-4">No jobs found.</td>
+        <td colspan="${colCount}" class="text-center text-muted py-4">${t("jobs.noJobs")}</td>
       </tr>
     `;
     renderPagination(data.length, totalPages);
@@ -124,8 +135,8 @@ function renderTable() {
         <td>${Number(j.normal_price || 0).toFixed(2)}</td>
         ${wageTiers.map(t => `<td>${(rates.get(t.id) != null) ? Number(rates.get(t.id)).toFixed(2) : "-"}</td>`).join("")}
         <td class="text-end">
-          <button class="btn btn-sm btn-outline-primary me-2" onclick="editJob(${j.id})">Edit</button>
-          <button class="btn btn-sm btn-outline-danger" onclick="deleteJob(${j.id})">Delete</button>
+          <button class="btn btn-sm btn-outline-primary me-2" onclick="editJob(${j.id})">${t("jobs.edit")}</button>
+          <button class="btn btn-sm btn-outline-danger" onclick="deleteJob(${j.id})">${t("jobs.delete")}</button>
         </td>
       </tr>
     `;
@@ -150,8 +161,12 @@ function renderTable() {
 
 function renderPagination(total, totalPages) {
   const text = total
-    ? `Showing ${(currentPage - 1) * pageSize + 1}-${Math.min(currentPage * pageSize, total)} of ${total} jobs`
-    : "No jobs";
+    ? t("jobs.showing", {
+        start: (currentPage - 1) * pageSize + 1,
+        end: Math.min(currentPage * pageSize, total),
+        total,
+      })
+    : t("jobs.none");
 
   const topCount = document.getElementById("jobsCountTop");
   const bottomCount = document.getElementById("jobsCountBottom");
@@ -265,8 +280,8 @@ function updateBulkDeleteButton() {
   const count = selectedJobIds.size;
   btn.disabled = count === 0;
   btn.innerHTML = count === 0
-    ? `<i class="bi bi-trash me-1"></i> Delete Selected`
-    : `<i class="bi bi-trash me-1"></i> Delete Selected (${count})`;
+    ? `<i class="bi bi-trash me-1"></i> ${t("jobs.deleteSelected")}`
+    : `<i class="bi bi-trash me-1"></i> ${t("jobs.deleteSelected")} (${count})`;
 }
 
 // -------- modal --------
@@ -334,7 +349,7 @@ window.saveJob = async () => {
 
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    alert(data?.error || "Save failed");
+    alert(data?.error || t("jobs.alert.saveError"));
     return;
   }
 
@@ -346,12 +361,12 @@ window.deleteJob = async (id) => {
   const j = allJobs.find(x => x.id === id);
   const label = j ? `${j.job_code} – ${j.job_type}` : `Job ID ${id}`;
 
-  if (!confirm(`Delete this job?\n\n${label}`)) return;
+  if (!confirm(t("jobs.alert.deleteConfirmSingle", { label }))) return;
 
   const res = await fetch(`/api/jobs/${id}?companyId=${companyId}`, { method: "DELETE" });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    alert(data?.error || "Delete failed");
+    alert(data?.error || t("jobs.alert.deleteFailedSingle"));
     return;
   }
 
@@ -364,9 +379,9 @@ window.bulkDeleteJobs = async () => {
   if (ids.length === 0) return;
 
   const msg =
-    `Delete ${ids.length} selected job(s)?\n\n` +
-    `This will remove the job(s) and their wage rows.\n` +
-    `If any job is used by Work Entries, delete may fail (FK restriction).`;
+    `${t("jobs.alert.deleteConfirm", { count: ids.length })}\n\n` +
+    `${t("jobs.alert.bulkDetail1")}\n` +
+    `${t("jobs.alert.bulkDetail2")}`;
 
   if (!confirm(msg)) return;
 
@@ -375,7 +390,7 @@ window.bulkDeleteJobs = async () => {
     const res = await fetch(`/api/jobs/${id}?companyId=${companyId}`, { method: "DELETE" });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      alert(`Failed deleting Job ID ${id}: ${data?.error || "Delete failed"}`);
+      alert(t("jobs.alert.bulkFailed", { id, error: data?.error || t("jobs.alert.deleteFailedSingle") }));
       break;
     }
     selectedJobIds.delete(Number(id));

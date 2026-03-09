@@ -8,10 +8,17 @@
 
         <!-- Company selector (always visible) -->
         <% if (user && Number(user.is_admin) === 1) { %>
-            <form class="d-flex align-items-center ms-3">
+            <form class="d-flex align-items-center ms-3 gap-3">
                 <select id="companySelect" class="form-select form-select-sm">
                 <option value="" disabled selected>Loading...</option>
                 </select>
+                <div class="d-flex align-items-center">
+                    <label class="small text-white-50 me-2" for="langSwitch" data-i18n="dashboard.language">Language</label>
+                    <select id="langSwitch" class="form-select form-select-sm" style="width: 110px;">
+                        <option value="en">English</option>
+                        <option value="zh">中文</option>
+                    </select>
+                </div>
             </form>
         <% } %>
 
@@ -60,7 +67,6 @@
                 </li>
                 <% } %>
 
-                
                 <li class="nav-item dropdown ms-lg-2">
                     <a
                         class="nav-link dropdown-toggle d-flex align-items-center"

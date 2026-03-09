@@ -8,6 +8,11 @@ let recordsFilterActive = false;
 let currentSortType = null;
 let selectedRecordIds = new Set();
 
+const t = (key, vars = {}) => window.AppI18n?.t(key, vars) ?? key;
+const applyTranslations = () => window.AppI18n?.apply?.();
+const initLangSwitch = () => window.AppI18n?.initLangSwitch?.();
+const onLangChange = (cb) => window.AppI18n?.onChange?.(cb);
+
 let jobsCache = [];      // [{id, job_code, job_type, customer_rate, wage_rates:[...]}]
 let tiersCache = [];     // [{id, tier_name}]
 let workersCache = [];
@@ -377,7 +382,7 @@ function loadRecords(options = {}) {
       tbody.innerHTML = `
         <tr>
           <td colspan="1" class="text-center text-danger py-4">
-            Failed to load records.
+            ${t("records.alert.loadFailed")}
           </td>
         </tr>
       `;
@@ -494,7 +499,7 @@ function renderRecordsTable() {
     renderRecordsPagination(1);
     tbody.innerHTML = `
       <tr>
-        <td class="text-center text-muted py-4" colspan="99">No records found.</td>
+        <td class="text-center text-muted py-4" colspan="99">${t("records.noRecords")}</td>
       </tr>`;
     return;
   }
@@ -502,7 +507,7 @@ function renderRecordsTable() {
   pageGroups.forEach((g, idx) => {
     const h = g.header;
     const lines = g.lines || [];
-    const payTypeText = h.is_bank ? "Bank" : "Cash";
+    const payTypeText = h.is_bank ? t("records.pay.bank") : t("records.pay.cash");
 
     const entryWageTotal = lines.reduce((s, x) => s + (x.wage_total || 0), 0);
     const entryCustTotal = lines.reduce((s, x) => s + (x.customer_total || 0), 0);
@@ -525,7 +530,7 @@ function renderRecordsTable() {
         <td>${h.job_no1 || "-"}</td>
         <td>${h.job_no2 || "-"}</td>
         <td>${groupWorkerLabel(h)}</td>
-        <td>${groupJobLabel(e)} <span class="badge-single">Single</span></td>
+        <td>${groupJobLabel(e)} <span class="badge-single">${t("records.badge.single")}</span></td>
         <td class="text-end">${e.amount.toFixed(1)}</td>
         <td class="text-end">${Number(h.fees_collected || 0).toFixed(2)}</td>
         <td class="text-end" data-col="cust_rate">${e.customer_rate.toFixed(2)}</td>
@@ -534,8 +539,8 @@ function renderRecordsTable() {
         <td class="text-end" data-col="wage_total">${e.wage_total.toFixed(2)}</td>
         <td>${escapeHtml(h.note || "-")}</td>
         <td class="text-end">
-          <button class="btn btn-sm btn-outline-primary me-2" onclick="openEditEntry(${e.id})">Edit</button>
-          <button class="btn btn-sm btn-outline-danger" onclick="deleteSingleRecord(${e.id})">Delete</button>
+          <button class="btn btn-sm btn-outline-primary me-2" onclick="openEditEntry(${e.id})">${t("records.edit")}</button>
+          <button class="btn btn-sm btn-outline-danger" onclick="deleteSingleRecord(${e.id})">${t("records.delete")}</button>
         </td>
       `;
       tbody.appendChild(tr);
@@ -566,8 +571,8 @@ function renderRecordsTable() {
           data-group="${parentId}" aria-label="Toggle jobs">
           −
         </button>
-        ENTRY
-        <span class="badge-multi">${lines.length} jobs</span>
+        ${t("records.entry")}
+        <span class="badge-multi">${t("records.badge.jobs", { count: lines.length })}</span>
       </td>
 
       <td class="text-end">${entryHoursTotal.toFixed(1)}</td>
@@ -606,8 +611,8 @@ function renderRecordsTable() {
         <td class="text-end" data-col="wage_total">${e.wage_total.toFixed(2)}</td>
         <td></td>
         <td class="text-end">
-          <button class="btn btn-sm btn-outline-primary me-2" onclick="openEditEntry(${e.id})">Edit</button>
-          <button class="btn btn-sm btn-outline-danger" onclick="deleteSingleRecord(${e.id})">Delete</button>
+          <button class="btn btn-sm btn-outline-primary me-2" onclick="openEditEntry(${e.id})">${t("records.edit")}</button>
+          <button class="btn btn-sm btn-outline-danger" onclick="deleteSingleRecord(${e.id})">${t("records.delete")}</button>
         </td>
       `;
       tbody.appendChild(trChild);
@@ -656,7 +661,9 @@ function bindParentCheckboxes() {
 
 // ---------- count / pagination ----------
 function updateRecordsCount(start, end, total) {
-  const text = total ? `Showing ${start + 1}-${end} of ${total} records` : "No records";
+  const text = total
+    ? t("records.showing", { start: start + 1, end, total })
+    : t("records.none");
   const top = document.getElementById("recordsCountTop");
   const bottom = document.getElementById("recordsCountBottom");
   if (top) top.textContent = text;
@@ -790,8 +797,8 @@ function updateDeleteSelectedButton() {
   const count = selectedRecordIds.size;
   btn.disabled = count === 0;
   btn.innerHTML = count === 0
-    ? `<i class="bi bi-trash"></i> Delete Selected`
-    : `<i class="bi bi-trash"></i> Delete Selected (${count})`;
+    ? `<i class="bi bi-trash"></i> ${t("records.deleteSelected")}`
+    : `<i class="bi bi-trash"></i> ${t("records.deleteSelected")} (${count})`;
 }
 
 async function deleteSelectedRecords() {
@@ -799,12 +806,12 @@ async function deleteSelectedRecords() {
   const companyId = getCurrentCompanyIdSafe();
 
   if (window.CAN_DELETE_ENTRY !== true) {
-    alert("No permission to delete records.");
+    alert(t("records.alert.noPermissionDelete"));
     return;
   }
   if (!ids.length) return;
 
-  if (!confirm(`Delete ${ids.length} selected entr${ids.length > 1 ? "ies" : "y"}?`)) return;
+  if (!confirm(t("records.alert.deleteSelected", { count: ids.length, suffix: ids.length > 1 ? "ies" : "y" }))) return;
 
   try {
     await Promise.all(
@@ -816,7 +823,7 @@ async function deleteSelectedRecords() {
     loadRecords();
   } catch (err) {
     console.error(err);
-    alert("Error deleting selected records.");
+    alert(t("records.alert.deleteError"));
   }
 }
 
@@ -1053,11 +1060,11 @@ function applyRatesFromJobAndTier() {
 
 window.openEditEntry = async function (id) {
   const rec = findRecordById(id);
-  if (!rec) return alert("Record not found. Please reload.");
+  if (!rec) return alert(t("records.alert.recordNotFound"));
 
   if (!editModal) {
     const el = document.getElementById("editEntryModal");
-    if (!el) return alert("Edit modal not found in HTML.");
+    if (!el) return alert(t("records.alert.modalMissing"));
     editModal = new bootstrap.Modal(el);
   }
 
@@ -1119,7 +1126,7 @@ window.openEditEntry = async function (id) {
     applyRatesFromJobAndTier();
   } catch (e) {
     console.error(e);
-    return alert("Failed to load jobs / wage tiers / workers.");
+    return alert(t("records.alert.loadRefsFailed"));
   }
 
   const hint = document.getElementById("editEntryHint");
@@ -1136,7 +1143,7 @@ window.deleteSingleRecord = async function (id) {
     return;
   }
 
-  if (!confirm(`Delete record #${id}?`)) return;
+  if (!confirm(t("records.alert.deleteOneConfirm", { id }))) return;
 
   try {
     const res = await fetch(`/api/work-entries/${id}?companyId=${companyId}`, { method: "DELETE" });
@@ -1144,7 +1151,7 @@ window.deleteSingleRecord = async function (id) {
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     loadRecords();
   } catch (e) {
-    alert(e.message || "Failed to delete.");
+    alert(e.message || t("records.alert.deleteOneFailed"));
   }
 };
 
@@ -1164,7 +1171,7 @@ async function saveEditEntry() {
   const worker_id = Number(document.getElementById("editWorkerId")?.value) || null;
 
   if (!id || !work_date || !job_no1 || !worker_id || !Number.isFinite(amount) || amount <= 0 || !job_code) {
-    alert("Date, Job No1, Worker, Job Code, and Hours are required.");
+    alert(t("records.alert.required"));
     return;
   }
 
@@ -1184,7 +1191,7 @@ async function saveEditEntry() {
   const wage_rate = canEditRates() ? inputWageRate : existingWageRate;
 
   if (!customer_rate || !wage_rate) {
-    alert("Customer Rate and Wage Rate are required.");
+    alert(t("records.alert.rateRequired"));
     return;
   }
 
@@ -1220,12 +1227,18 @@ async function saveEditEntry() {
     editModal?.hide();
     loadRecords({ preservePage: true, page: prevPage });
   } catch (e) {
-    alert(e.message || "Failed to update record.");
+    alert(e.message || t("records.alert.updateFailed"));
   }
 }
 
 // ---------- misc ----------
 document.addEventListener("DOMContentLoaded", () => {
+  applyTranslations();
+  initLangSwitch();
+  onLangChange(() => {
+    renderRecordsTable();
+  });
+
   injectRecordsStylesOnce();
   loadRecords();
   applyRatesVisibility();

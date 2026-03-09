@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title><%= title %></title>
+  <title data-i18n="companies.pageTitle"><%= title %></title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
@@ -18,7 +18,7 @@
     <!-- Header + Primary Action -->
     <div class="d-flex justify-content-between align-items-center mb-4 pb-2 border-bottom">
       <h1 class="fw-bold text-primary display-6">
-        <i class="bi bi-building me-2"></i> Company Directory
+        <i class="bi bi-building me-2"></i> <span data-i18n="companies.title">Company Directory</span>
       </h1>
 
       <button
@@ -26,14 +26,14 @@
         class="btn btn-lg btn-success shadow-sm rounded-pill px-4"
         onclick="openCreateCompany()"
       >
-        <i class="bi bi-plus-lg me-1"></i> Add New Company
+        <i class="bi bi-plus-lg me-1"></i> <span data-i18n="companies.addNew">Add New Company</span>
       </button>
     </div>
 
     <!-- Search row -->
     <div class="row mb-4 g-3 align-items-end">
       <div class="col-md-4">
-        <label class="form-label fw-medium">Search by Code</label>
+        <label class="form-label fw-medium" data-i18n="companies.searchCode">Search by Code</label>
         <div class="input-group shadow-sm rounded-pill overflow-hidden">
           <span class="input-group-text bg-white border-0">
             <i class="bi bi-search"></i>
@@ -43,12 +43,13 @@
             id="searchCompanyCode"
             class="form-control border-0 py-2"
             placeholder="e.g. MALL, HQ, BR01..."
+            data-i18n-placeholder="companies.searchCodePlaceholder"
           />
         </div>
       </div>
 
       <div class="col-md-6">
-        <label class="form-label fw-medium">Search by Name</label>
+        <label class="form-label fw-medium" data-i18n="companies.searchName">Search by Name</label>
         <div class="input-group shadow-sm rounded-pill overflow-hidden">
           <span class="input-group-text bg-white border-0">
             <i class="bi bi-search"></i>
@@ -58,6 +59,7 @@
             id="searchCompanyName"
             class="form-control border-0 py-2"
             placeholder="Company name..."
+            data-i18n-placeholder="companies.searchNamePlaceholder"
           />
         </div>
       </div>
@@ -77,7 +79,7 @@
       <div class="card-body p-0">
         <!-- Top pagination / count -->
         <div class="d-flex justify-content-between align-items-center px-3 py-2 border-bottom bg-light">
-          <small class="text-muted" id="companiesCountTop">Loading...</small>
+          <small class="text-muted" id="companiesCountTop" data-i18n="companies.loadingShort">Loading...</small>
           <nav>
             <ul class="pagination pagination-sm mb-0" id="companiesPaginationTop"></ul>
           </nav>
@@ -88,11 +90,11 @@
           <table class="table table-hover mb-0" id="companiesTable">
             <thead class="table-primary text-uppercase small">
               <tr>
-                <th scope="col">Code</th>
-                <th scope="col">Name</th>
-                <th scope="col">Address</th>
-                <th scope="col">Phone</th>
-                <th scope="col" class="text-end">Actions</th>
+                <th scope="col" data-i18n="companies.table.code">Code</th>
+                <th scope="col" data-i18n="companies.table.name">Name</th>
+                <th scope="col" data-i18n="companies.table.address">Address</th>
+                <th scope="col" data-i18n="companies.table.phone">Phone</th>
+                <th scope="col" class="text-end" data-i18n="companies.table.actions">Actions</th>
               </tr>
             </thead>
             <tbody id="companiesBody">
@@ -101,7 +103,7 @@
                   <div class="spinner-border spinner-border-sm me-2 text-primary" role="status">
                     <span class="visually-hidden">Loading...</span>
                   </div>
-                  Loading company data...
+                  <span data-i18n="companies.loading">Loading company data...</span>
                 </td>
               </tr>
             </tbody>
@@ -124,7 +126,7 @@
     <div class="modal-dialog modal-lg">
       <div class="modal-content rounded-3">
         <div class="modal-header">
-          <h5 class="modal-title">Company</h5>
+          <h5 class="modal-title" data-i18n="companies.modal.title">Company</h5>
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
 
@@ -134,43 +136,47 @@
 
                 <div class="row g-3">
                     <div class="col-md-4">
-                    <label class="form-label">Short Code</label>
+                    <label class="form-label" data-i18n="companies.field.shortCode">Short Code</label>
                     <input
                         type="text"
                         id="companyShortCode"
                         class="form-control"
                         placeholder="e.g. MALL, HQ"
+                        data-i18n-placeholder="companies.searchCodePlaceholder"
                     />
                     </div>
 
                     <div class="col-md-8">
-                    <label class="form-label">Company Name</label>
+                    <label class="form-label" data-i18n="companies.field.name">Company Name</label>
                     <input
                         type="text"
                         id="companyName"
                         class="form-control"
                         placeholder="Full company name"
+                        data-i18n-placeholder="companies.searchNamePlaceholder"
                         required
                     />
                     </div>
 
                     <div class="col-md-8">
-                    <label class="form-label">Address</label>
+                    <label class="form-label" data-i18n="companies.field.address">Address</label>
                     <input
                         type="text"
                         id="companyAddress"
                         class="form-control"
                         placeholder="Address (optional)"
+                        data-i18n-placeholder="companies.field.address"
                     />
                     </div>
 
                     <div class="col-md-4">
-                    <label class="form-label">Phone</label>
+                    <label class="form-label" data-i18n="companies.field.phone">Phone</label>
                     <input
                         type="text"
                         id="companyPhone"
                         class="form-control"
                         placeholder="Phone (optional)"
+                        data-i18n-placeholder="companies.field.phone"
                     />
                     </div>
                 </div>
@@ -178,13 +184,13 @@
 
             <hr class="my-3" />
             <div>
-                <label class="form-label fw-medium mb-2">Wage Rules</label>
+                <label class="form-label fw-medium mb-2" data-i18n="companies.field.rules">Wage Rules</label>
 
                 <div id="companyRulesBox" class="border rounded-3 p-3 bg-light">
-                    <div class="text-muted small">Loading rules...</div>
+                    <div class="text-muted small" data-i18n="companies.rulesLoading">Loading rules...</div>
                 </div>
 
-                <div class="form-text">
+                <div class="form-text" data-i18n="companies.rulesBaseHelp">
                     Base rule is always enabled. You can add more rules later.
                 </div>
             </div>
@@ -194,11 +200,11 @@
 
 
         <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" data-i18n="companies.cancel">
             Cancel
           </button>
           <button type="button" class="btn btn-primary" onclick="saveCompany()">
-            Save
+            <span data-i18n="companies.save">Save</span>
           </button>
         </div>
       </div>
@@ -208,6 +214,7 @@
   <!-- Scripts -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="/js/company-switcher.js"></script>
+  <script src="/js/i18n.js"></script>
   <script src="/js/companies.js"></script>
 </body>
 </html>

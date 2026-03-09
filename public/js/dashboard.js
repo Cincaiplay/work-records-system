@@ -34,6 +34,11 @@ let isSyncingNested = false;
 
 const $ = (id) => document.getElementById(id);
 const qsa = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+
+const t = (key, vars = {}) => window.AppI18n?.t(key, vars) ?? key;
+const applyTranslations = () => window.AppI18n?.apply?.();
+const initLangSwitch = () => window.AppI18n?.initLangSwitch?.();
+const onLangChange = (cb) => window.AppI18n?.onChange?.(cb);
 const todayISO = () => new Date().toISOString().split("T")[0];
 const norm = (v) => String(v ?? "").trim();
 const toMoney0 = (v) => (norm(v) === "" || !Number.isFinite(Number(v)) ? 0 : Number(v));
@@ -116,7 +121,7 @@ function renderJobCheckboxes(filterText = "") {
   });
 
   if (!jobs.length) {
-    wrap.innerHTML = `<div class="text-muted small fst-italic">No matching jobs.</div>`;
+    wrap.innerHTML = `<div class="text-muted small fst-italic">${t("dashboard.errNoMatchingJobs")}</div>`;
     return;
   }
 
@@ -167,7 +172,7 @@ function renderJobHourRows() {
   const codes = getSelectedJobCodes();
 
   if (!codes.length) {
-    wrap.innerHTML = `<div class="text-muted small fst-italic">Select job(s) to enter hours.</div>`;
+    wrap.innerHTML = `<div class="text-muted small fst-italic">${t("dashboard.selectJobsToEnterHours")}</div>`;
     return;
   }
 
@@ -189,7 +194,7 @@ function renderJobHourRows() {
         class="form-control"
         min="0"
         step="0.5"
-        placeholder="Hours"
+        placeholder="${t("dashboard.hoursPlaceholder")}"
         data-job-hours="${code}"
       />
     `;
@@ -310,7 +315,7 @@ async function loadWorkers() {
 
   const select = $("workerSelect");
   if (select) {
-    select.innerHTML = `<option value="" disabled selected>Select worker</option>`;
+    select.innerHTML = `<option value="" disabled selected>${t("dashboard.selectWorker")}</option>`;
     allWorkers.forEach((w) => {
       const opt = document.createElement("option");
       opt.value = w.id;
@@ -327,6 +332,22 @@ async function loadWorkers() {
 
 // ---------- DOMContentLoaded ----------
 document.addEventListener("DOMContentLoaded", async () => {
+  applyTranslations();
+  initLangSwitch();
+  onLangChange(() => {
+    const workerSelect = $("workerSelect");
+    if (workerSelect?.options?.length) {
+      workerSelect.options[0].textContent = t("dashboard.selectWorker");
+    }
+    renderJobCheckboxes($("jobSearch")?.value || "");
+    renderJobHourRows();
+    renderPendingEntriesTable();
+    if (hotBatch) {
+      hotBatch.updateSettings({ columns: buildBatchColumns(), colHeaders: buildBatchHeaders() });
+      hotBatch.render();
+    }
+  });
+
   if (window.companyReady) await window.companyReady;
   await loadCompanyTitle();
 
@@ -473,25 +494,25 @@ window.addEntryToTable = async function () {
 
   const jobCodes = getSelectedJobCodes();
 
-  if (!worker_id || !work_date) return alert("Please select worker and choose a date.");
-  if (!job_no1) return alert("Job No1 is required.");
-  if (!jobCodes.length) return alert("Please select at least 1 job.");
+  if (!worker_id || !work_date) return alert(t("dashboard.errSelectWorkerDate"));
+  if (!job_no1) return alert(t("dashboard.errJobNo1Required"));
+  if (!jobCodes.length) return alert(t("dashboard.errSelectJob"));
 
   const worker = allWorkers.find((w) => String(w.id) === String(worker_id));
-  if (!worker) return alert("Unable to find worker details.");
+  if (!worker) return alert(t("dashboard.errWorkerNotFound"));
   if (!worker?.wage_tier_id) {
-    return alert("This worker has no wage tier assigned yet. Please edit the worker and set a wage tier.");
+    return alert(t("dashboard.errWorkerNoTier"));
   }
 
   const hoursMap = getHoursByJobCode();
   for (const code of jobCodes) {
     const h = Number(hoursMap.get(code));
-    if (!Number.isFinite(h) || h <= 0) return alert(`Invalid hours for job "${code}" (must be > 0).`);
+    if (!Number.isFinite(h) || h <= 0) return alert(t("dashboard.errInvalidHoursJob", { code }));
   }
 
   const lines = jobCodes.map((code) => {
     const job = allJobs.find((j) => j.job_code === code);
-    if (!job) throw new Error(`Job not found: ${code}`);
+    if (!job) throw new Error(t("dashboard.errJobNotFound", { job: code }));
 
     let customerRate = job.normal_price != null ? Number(job.normal_price) : 0;
 
@@ -500,14 +521,14 @@ window.addEntryToTable = async function () {
       if (!isNaN(customCustomer) && customCustomer > 0) customerRate = customCustomer;
     }
 
-    if (!customerRate || customerRate <= 0) throw new Error(`No valid customer price for job "${code}"`);
+    if (!customerRate || customerRate <= 0) throw new Error(t("dashboard.errNoValidCustomerPrice", { code }));
 
     const hours = Number(hoursMap.get(code));
     const customerTotal = customerRate * hours;
 
     let wageRate = getBaseWageRate(job, worker);
     if (!isValidWageRate(wageRate)) {
-      throw new Error(`No valid base wage for job "${code}" (check job wage tiers).`);
+      throw new Error(t("dashboard.errNoValidBaseWage", { code }));
     }
 
     return {
@@ -835,17 +856,17 @@ class JobsMultiSelectEditor extends Handsontable.editors.BaseEditor {
     this.container.innerHTML = `
       <div class="p-2" style="width: 340px;">
         <div class="d-flex gap-2 mb-2">
-          <input id="ms-search" class="form-control form-control-sm" placeholder="Search job code / type..." />
-          <button type="button" class="btn btn-outline-secondary btn-sm" id="ms-all">All</button>
-          <button type="button" class="btn btn-outline-secondary btn-sm" id="ms-none">None</button>
+          <input id="ms-search" class="form-control form-control-sm" placeholder="${t("dashboard.editorSearchPlaceholder")}" />
+          <button type="button" class="btn btn-outline-secondary btn-sm" id="ms-all">${t("dashboard.selectAll")}</button>
+          <button type="button" class="btn btn-outline-secondary btn-sm" id="ms-none">${t("dashboard.selectNone")}</button>
         </div>
 
         <div id="ms-list" class="border rounded-2" style="max-height: 220px; overflow:auto; background:#fff;"></div>
 
         <hr class="my-2">
         <div class="d-flex gap-2">
-          <button type="button" class="btn btn-sm btn-primary flex-grow-1" id="ms-apply">Save</button>
-          <button type="button" class="btn btn-sm btn-outline-secondary" id="ms-cancel">Cancel</button>
+          <button type="button" class="btn btn-sm btn-primary flex-grow-1" id="ms-apply">${t("dashboard.editorSave")}</button>
+          <button type="button" class="btn btn-sm btn-outline-secondary" id="ms-cancel">${t("dashboard.editorCancel")}</button>
         </div>
       </div>
     `;
@@ -865,7 +886,7 @@ class JobsMultiSelectEditor extends Handsontable.editors.BaseEditor {
         : jobs.filter((j) => j.label.toLowerCase().includes(query));
 
       if (!filtered.length) {
-        listEl.innerHTML = `<div class="text-muted small fst-italic p-2">No matching jobs.</div>`;
+        listEl.innerHTML = `<div class="text-muted small fst-italic p-2">${t("dashboard.errNoMatchingJobs")}</div>`;
         return;
       }
 
@@ -923,7 +944,7 @@ class JobsMultiSelectEditor extends Handsontable.editors.BaseEditor {
         })
         .filter(Boolean);
 
-      if (!selectedCodes.length) return alert("Please select at least 1 job.");
+      if (!selectedCodes.length) return alert(t("dashboard.errSelectJob"));
 
       hot.setDataAtRowProp(this.row, "job_type_cell", selectedCodes.join(", "), "msApply");
       this.finishEditing(false);
@@ -982,6 +1003,22 @@ function buildBatchColumns() {
   ];
 }
 
+function buildBatchHeaders() {
+  return [
+    t("dashboard.tableDate"),
+    t("dashboard.tableJobNo1"),
+    t("dashboard.tableJobNo2"),
+    t("dashboard.batchWorkerCode"),
+    t("dashboard.batchJobType"),
+    t("dashboard.tableHours"),
+    t("dashboard.batchCustRate"),
+    t("dashboard.batchWage"),
+    t("dashboard.tableFeesCollected"),
+    t("dashboard.batchBankYn"),
+    t("dashboard.tableNote"),
+  ];
+}
+
 function initHotBatch(rowCount = 10) {
   const container = $("hotBatch");
   if (!container) return;
@@ -1006,19 +1043,7 @@ function initHotBatch(rowCount = 10) {
     outsideClickDeselects: false,
 
     colWidths: [110, 60, 60, 160, 180, 50, 70, 70, 90, 70, 230],
-    colHeaders: [
-      "Date",
-      "Job No1",
-      "Job No2",
-      "Worker Code",
-      "Job Type",
-      "Hours",
-      "CustRate",
-      "Wage",
-      "Fees Collected",
-      "Bank(y/n)",
-      "Note",
-    ],
+    colHeaders: buildBatchHeaders(),
     columns: buildBatchColumns(),
 
     hiddenColumns: { columns: showRates ? [] : [6, 7], indicators: true },
@@ -1173,7 +1198,7 @@ function clearBatchGrid() {
 
 window.addBatchRowsToPending = async function () {
   await rulesReady;
-  if (!hotBatch) return alert("Batch grid is not ready.");
+  if (!hotBatch) return alert(t("dashboard.batchGridNotReady"));
 
   const failures = [];
   let addedGroups = 0;
@@ -1208,15 +1233,15 @@ window.addBatchRowsToPending = async function () {
 
     // validate parent
     if (!work_date || !isValidDate(work_date)) {
-      failures.push({ rowIndex: i, reason: "Invalid Date (must be YYYY-MM-DD)" });
+      failures.push({ rowIndex: i, reason: t("dashboard.errInvalidDate") });
       continue;
     }
     if (!job_no1) {
-      failures.push({ rowIndex: i, reason: "Missing Job No1" });
+      failures.push({ rowIndex: i, reason: t("dashboard.errMissingJobNo1") });
       continue;
     }
     if (!worker_code) {
-      failures.push({ rowIndex: i, reason: "Missing Worker Code" });
+      failures.push({ rowIndex: i, reason: t("dashboard.errMissingWorkerCode") });
       continue;
     }
     const parentJob = norm(p.job_type_cell);
@@ -1224,7 +1249,7 @@ window.addBatchRowsToPending = async function () {
     const isSingleJob = !children.length && parentJob !== "";
 
     if (!children.length && !parentJob) {
-      failures.push({ rowIndex: i, reason: "No job lines (select jobs in parent Job Type column)" });
+      failures.push({ rowIndex: i, reason: t("dashboard.errNoJobLines") });
       continue;
     }
 
@@ -1233,11 +1258,11 @@ window.addBatchRowsToPending = async function () {
       (w) => (w.worker_code || "").toLowerCase() === worker_code.toLowerCase()
     );
     if (!worker) {
-      failures.push({ rowIndex: i, reason: `Worker not found: "${worker_code}"` });
+      failures.push({ rowIndex: i, reason: t("dashboard.errWorkerNotFoundCode", { code: worker_code }) });
       continue;
     }
     if (!worker?.wage_tier_id) {
-      failures.push({ rowIndex: i, reason: `Worker has no wage tier: "${worker_code}"` });
+      failures.push({ rowIndex: i, reason: t("dashboard.errWorkerNoTierCode", { code: worker_code }) });
       continue;
     }
 
@@ -1251,7 +1276,7 @@ window.addBatchRowsToPending = async function () {
       const hours = Number(p.hours);
 
       if (!Number.isFinite(hours) || hours <= 0) {
-        failures.push({ rowIndex: i, reason: `Invalid Hours (must be > 0)` });
+        failures.push({ rowIndex: i, reason: t("dashboard.errInvalidHours") });
         jobs.length = 0;
       } else {
         const job =
@@ -1259,7 +1284,7 @@ window.addBatchRowsToPending = async function () {
           allJobs.find((j) => String(j.job_code || "").toLowerCase() === job_input.toLowerCase());
 
         if (!job) {
-          failures.push({ rowIndex: i, reason: `Job not found: "${job_input}"` });
+          failures.push({ rowIndex: i, reason: t("dashboard.errJobNotFound", { job: job_input }) });
         } else {
           // ✅ allow override from parent CustRate / Wage columns if provided
           let customerRate =
@@ -1268,7 +1293,7 @@ window.addBatchRowsToPending = async function () {
               : (job.normal_price != null && Number(job.normal_price) > 0 ? Number(job.normal_price) : null);
 
           if (customerRate == null) {
-            failures.push({ rowIndex: i, reason: `Missing customer price for "${job.job_type}"` });
+            failures.push({ rowIndex: i, reason: t("dashboard.errMissingCustomerPrice", { job: job.job_type }) });
           } else {
             let wageRate =
               isValidWageRate(Number(p.wage_rate))
@@ -1276,7 +1301,7 @@ window.addBatchRowsToPending = async function () {
                 : getBaseWageRate(job, worker);
 
             if (!isValidWageRate(wageRate)) {
-              failures.push({ rowIndex: i, reason: `Missing wage rate for "${job.job_type}"` });
+              failures.push({ rowIndex: i, reason: t("dashboard.errMissingWageRate", { job: job.job_type }) });
             } else {
               const customerTotal = customerRate * hours;
 
@@ -1313,17 +1338,17 @@ window.addBatchRowsToPending = async function () {
         const hours = Number(ch.hours);
 
         if (!job_input) {
-          failures.push({ rowIndex: i, reason: `Child ${c + 1}: Missing Job Type (follows parent)` });
+          failures.push({ rowIndex: i, reason: t("dashboard.errChildMissingJobType", { n: c + 1 }) });
           jobs.length = 0;
           break;
         }
         if (!Number.isFinite(hours) || hours <= 0) {
-          failures.push({ rowIndex: i, reason: `Child ${c + 1}: Invalid Hours (must be > 0)` });
+          failures.push({ rowIndex: i, reason: t("dashboard.errChildInvalidHours", { n: c + 1 }) });
           jobs.length = 0;
           break;
         }
         if (seen.has(job_input.toLowerCase())) {
-          failures.push({ rowIndex: i, reason: `Duplicate job in same entry: ${job_input}` });
+          failures.push({ rowIndex: i, reason: t("dashboard.errDuplicateJob", { job: job_input }) });
           jobs.length = 0;
           break;
         }
@@ -1334,7 +1359,7 @@ window.addBatchRowsToPending = async function () {
           allJobs.find((j) => String(j.job_code || "").toLowerCase() === job_input.toLowerCase());
 
         if (!job) {
-          failures.push({ rowIndex: i, reason: `Job not found: "${job_input}"` });
+          failures.push({ rowIndex: i, reason: t("dashboard.errJobNotFound", { job: job_input }) });
           jobs.length = 0;
           break;
         }
@@ -1346,7 +1371,7 @@ window.addBatchRowsToPending = async function () {
             : (job.normal_price != null && Number(job.normal_price) > 0 ? Number(job.normal_price) : null);
 
         if (customerRate == null) {
-          failures.push({ rowIndex: i, reason: `Missing customer price for "${job.job_type}"` });
+          failures.push({ rowIndex: i, reason: t("dashboard.errMissingCustomerPrice", { job: job.job_type }) });
           jobs.length = 0;
           break;
         }
@@ -1357,7 +1382,7 @@ window.addBatchRowsToPending = async function () {
             : getBaseWageRate(job, worker);
 
         if (!isValidWageRate(wageRate)) {
-          failures.push({ rowIndex: i, reason: `Missing wage rate for "${job.job_type}"` });
+          failures.push({ rowIndex: i, reason: t("dashboard.errMissingWageRate", { job: job.job_type }) });
           jobs.length = 0;
           break;
         }
@@ -1439,14 +1464,14 @@ window.addBatchRowsToPending = async function () {
   nr?.updatePlugin?.();
   hotBatch.render();
 
-  let msg = `Added ${addedGroups} grouped entry(ies) to pending table.`;
+  let msg = t("dashboard.pendingAdded", { count: addedGroups });
   if (failures.length) {
-    msg += `\n\n${failures.length} row(s) NOT added:\n`;
+    msg += `\n\n${t("dashboard.batchNotAddedHeader", { count: failures.length })}\n`;
     msg += failures
       .slice(0, 12)
-      .map((x) => `Row ${rowNo(x.rowIndex)}: ${x.reason}`)
+      .map((x) => t("dashboard.batchRowLine", { row: rowNo(x.rowIndex), reason: x.reason }))
       .join("\n");
-    if (failures.length > 12) msg += `\n...and ${failures.length - 12} more.`;
+    if (failures.length > 12) msg += `\n${t("dashboard.batchMore", { count: failures.length - 12 })}`;
   }
 
   alert(msg);
@@ -1582,7 +1607,7 @@ function renderPendingEntriesTable() {
   if (pendingEntries.length === 0) {
     tbody.innerHTML = `
       <tr class="text-muted">
-        <td colspan="16" class="text-center fst-italic py-3">No work entries recorded yet.</td>
+        <td colspan="16" class="text-center fst-italic py-3">${t("dashboard.noWorkEntries")}</td>
       </tr>`;
     if (wageTotalCell) wageTotalCell.textContent = "0.00";
     if (customerTotalCell) customerTotalCell.textContent = "0.00";
@@ -1595,7 +1620,7 @@ function renderPendingEntriesTable() {
   pendingEntries.forEach((entry, entryIndex) => {
     const h = entry.header || {};
     const jobs = Array.isArray(entry.jobs) ? entry.jobs : [];
-    const payTypeText = h.is_bank ? "Bank" : "Cash";
+    const payTypeText = h.is_bank ? t("dashboard.payTypeBank") : t("dashboard.payTypeCash");
 
     const entryWageTotal = jobs.reduce((s, j) => s + (Number(j.wage_total) || 0), 0);
     grandWageTotal += entryWageTotal;
@@ -1628,7 +1653,7 @@ function renderPendingEntriesTable() {
             data-action="delete-pending"
             ${isSavingEntries ? "disabled" : ""}
             onclick="removePendingEntry(${entryIndex})">
-            Delete
+            ${t("dashboard.delete")}
           </button>
         </td>
       `;
@@ -1647,7 +1672,7 @@ function renderPendingEntriesTable() {
       <td class="fw-bold">${h.job_no1 || "-"}</td>
       <td>${h.job_no2 || "-"}</td>
       <td>${h.worker_label || "-"}</td>
-      <td class="fw-bold">ENTRY</td>
+      <td class="fw-bold">${t("dashboard.entryLabel")}</td>
       <td></td>
       <td>${payTypeText}</td>
       <td class="fw-bold">${Number(h.fees_collected || 0).toFixed(2)}</td>
@@ -1663,7 +1688,7 @@ function renderPendingEntriesTable() {
           data-action="delete-pending"
           ${isSavingEntries ? "disabled" : ""}
           onclick="removePendingEntry(${entryIndex})">
-          Delete
+          ${t("dashboard.delete")}
         </button>
       </td>
     `;
@@ -1707,18 +1732,18 @@ function validatePendingEntryGrouped(entry) {
   const h = entry?.header || {};
   const jobs = entry?.jobs || [];
 
-  if (!h.worker_id) errors.push("worker_id missing");
-  if (!norm(h.job_no1)) errors.push("job_no1 missing");
-  if (!h.work_date) errors.push("work_date missing");
-  if (!Array.isArray(jobs) || jobs.length < 1) errors.push("jobs[] missing");
+  if (!h.worker_id) errors.push(t("dashboard.errWorkerIdMissing"));
+  if (!norm(h.job_no1)) errors.push(t("dashboard.errJobNo1Missing"));
+  if (!h.work_date) errors.push(t("dashboard.errWorkDateMissing"));
+  if (!Array.isArray(jobs) || jobs.length < 1) errors.push(t("dashboard.errJobsMissing"));
 
   const fees = Number(h.fees_collected || 0);
-  if (!Number.isFinite(fees) || fees < 0) errors.push("fees_collected invalid");
+  if (!Number.isFinite(fees) || fees < 0) errors.push(t("dashboard.errFeesInvalid"));
 
   jobs.forEach((j, idx) => {
-    if (!j.job_code) errors.push(`job[${idx}] job_code missing`);
+    if (!j.job_code) errors.push(t("dashboard.errJobCodeMissing", { idx }));
     const hrs = Number(j.hours);
-    if (!Number.isFinite(hrs) || hrs <= 0) errors.push(`job[${idx}] hours invalid`);
+    if (!Number.isFinite(hrs) || hrs <= 0) errors.push(t("dashboard.errJobHoursInvalid", { idx }));
   });
 
   return errors;
@@ -1727,8 +1752,8 @@ function validatePendingEntryGrouped(entry) {
 window.confirmEntries = async function () {
   const companyId = getCompanyId();
 
-  if (pendingEntries.length === 0) return alert("No entries to save.");
-  if (!confirm("Save all entries to the database?")) return;
+  if (pendingEntries.length === 0) return alert(t("dashboard.noEntriesToSave"));
+  if (!confirm(t("dashboard.confirmSaveAll"))) return;
 
   setSavingUI(true);
 
@@ -1738,10 +1763,10 @@ window.confirmEntries = async function () {
       .filter((x) => x.errors.length);
 
     if (validationFailures.length) {
-      alert(
-        "Fix these entries before saving:\n\n" +
-          validationFailures.map((x) => `Entry ${x.row}: ${x.errors.join(", ")}`).join("\n")
-      );
+      const details = validationFailures
+        .map((x) => t("dashboard.entryErrorLine", { row: x.row, errors: x.errors.join(", ") }))
+        .join("\n");
+      alert(t("dashboard.fixEntriesBeforeSaving", { details }));
       return;
     }
 
@@ -1805,7 +1830,7 @@ window.confirmEntries = async function () {
     });
 
     if (!failed.length) {
-      alert(`Entries saved successfully. (${succeededCount})`);
+      alert(t("dashboard.savedSuccess", { count: succeededCount }));
       pendingEntries = [];
       renderPendingEntriesTable();
       return;
@@ -1814,10 +1839,8 @@ window.confirmEntries = async function () {
     pendingEntries = failed.map((x) => x.entry);
     renderPendingEntriesTable();
 
-    alert(
-      `Saved ${succeededCount} entry(s). ${failed.length} entry(s) failed and were kept in Pending:\n\n` +
-        failed.map((x) => `Entry ${x.row}: ${x.error}`).join("\n")
-    );
+    const details = failed.map((x) => t("dashboard.entryErrorLine", { row: x.row, errors: x.error })).join("\n");
+    alert(t("dashboard.savedPartial", { ok: succeededCount, fail: failed.length, details }));
   } finally {
     setSavingUI(false);
   }
@@ -1860,13 +1883,14 @@ function setSavingUI(isSaving) {
       btn.dataset.originalText = btn.innerHTML;
       btn.innerHTML = `
         <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
-        Saving...
+        ${t("dashboard.savingShort")}
       `;
     } else {
       btn.disabled = false;
-      btn.innerHTML = btn.dataset.originalText || "Confirm & Save";
+      btn.innerHTML = btn.dataset.originalText || t("dashboard.confirmSave");
     }
   }
 
   qsa("#workEntriesBody button[data-action='delete-pending']").forEach((b) => (b.disabled = isSaving));
 }
+
