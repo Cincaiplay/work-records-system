@@ -7,7 +7,8 @@
     "start": "node index.js",
     "dev": "nodemon index.js",
     "seed": "node src/config/seed.js",
-    "migrate": "psql \"$DATABASE_URL\" -f migrations/001_init.sql"
+    "migrate": "psql \"$DATABASE_URL\" -f migrations/001_init.sql",
+    "migrate:basic-salary": "psql \"$DATABASE_URL\" -f migrations/003_workers_basic_salary.sql"
   },
   "keywords": [],
   "author": "CheeYuKoh",

@@ -82,6 +82,7 @@ router.get("/", async (req, res) => {
         w.field1,
         w.is_active,
         w.wage_tier_id,
+        w.basic_salary,
         w.created_at,
         wt.tier_name AS wage_tier_name
       FROM workers w
@@ -118,6 +119,7 @@ router.post("/", async (req, res) => {
     nationality,
     field1,
     wage_tier_id,
+    basic_salary,
     is_active,
   } = req.body;
 
@@ -135,8 +137,8 @@ router.post("/", async (req, res) => {
       INSERT INTO workers (
         company_id, worker_code, worker_name, worker_english_name,
         passport_no, employment_start, nationality, field1,
-        wage_tier_id, is_active
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        wage_tier_id, basic_salary, is_active
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
       RETURNING id
       `,
       [
@@ -149,6 +151,7 @@ router.post("/", async (req, res) => {
         nationality || null,
         field1 || null,
         wageTierIdVal,
+        basic_salary ?? null,
         activeVal,
       ]
     );
@@ -181,6 +184,7 @@ router.put("/:id", async (req, res) => {
     nationality,
     field1,
     wage_tier_id,
+    basic_salary,
     is_active,
   } = req.body;
 
@@ -203,9 +207,10 @@ router.put("/:id", async (req, res) => {
              nationality = $6,
              field1 = $7,
              wage_tier_id = $8,
-             is_active = $9
-       WHERE id = $10
-         AND company_id = $11
+             basic_salary = $9,
+             is_active = $10
+       WHERE id = $11
+         AND company_id = $12
       `,
       [
         worker_code,
@@ -216,6 +221,7 @@ router.put("/:id", async (req, res) => {
         nationality || null,
         field1 || null,
         wageTierIdVal,
+        basic_salary ?? null,
         activeVal,
         workerId,
         companyId,
@@ -292,7 +298,7 @@ router.get("/export", async (req, res) => {
       `
       SELECT worker_code, worker_name, worker_english_name, passport_no,
              nationality, employment_start::text AS employment_start,
-             is_active, wage_tier_id, field1
+             is_active, wage_tier_id, basic_salary, field1
         FROM workers
        WHERE company_id = $1
        ORDER BY worker_code ASC
@@ -311,6 +317,7 @@ router.get("/export", async (req, res) => {
       "employment_start",
       "is_active",
       "wage_tier_id",
+      "basic_salary",
       "field1",
     ].join(",");
 
@@ -325,6 +332,7 @@ router.get("/export", async (req, res) => {
           x.employment_start ?? "",
           x.is_active ?? "",
           x.wage_tier_id ?? "",
+          x.basic_salary ?? "",
           x.field1 ?? "",
         ]
           .map(csvEscape)
@@ -385,6 +393,10 @@ router.post("/import", upload.single("file"), async (req, res) => {
         const nationality = asTrimOrNull(r.nationality);
         const employment_start = asTrimOrNull(r.employment_start);
         const field1 = asTrimOrNull(r.field1 ?? r.note);
+        const basic_salary =
+          r.basic_salary !== undefined && String(r.basic_salary).trim() !== ""
+            ? Number(r.basic_salary)
+            : null;
 
         const wage_tier_id =
           r.wage_tier_id !== undefined && String(r.wage_tier_id).trim() !== ""
@@ -422,8 +434,8 @@ router.post("/import", upload.single("file"), async (req, res) => {
             `
             INSERT INTO workers
               (company_id, worker_code, worker_name, worker_english_name, passport_no,
-               employment_start, nationality, field1, is_active, wage_tier_id)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+               employment_start, nationality, field1, is_active, wage_tier_id, basic_salary)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
             `,
             [
               companyId,
@@ -436,6 +448,7 @@ router.post("/import", upload.single("file"), async (req, res) => {
               field1,
               is_active ?? 1,
               wage_tier_id,
+              basic_salary,
             ]
           );
           inserted++;
@@ -454,6 +467,7 @@ router.post("/import", upload.single("file"), async (req, res) => {
           if (nationality !== null) { sets.push(`nationality = $${p++}`); values.push(nationality); }
           if (field1 !== null) { sets.push(`field1 = $${p++}`); values.push(field1); }
           if (wage_tier_id !== null) { sets.push(`wage_tier_id = $${p++}`); values.push(wage_tier_id); }
+          if (basic_salary !== null) { sets.push(`basic_salary = $${p++}`); values.push(basic_salary); }
           if (is_active !== null) { sets.push(`is_active = $${p++}`); values.push(is_active); }
 
           values.push(id);
@@ -525,6 +539,10 @@ router.post("/import/preview", upload.single("file"), async (req, res) => {
       const nationality = asTrimOrNull(r.nationality);
       const employment_start = asTrimOrNull(r.employment_start);
       const field1 = asTrimOrNull(r.field1 ?? r.note);
+      const basic_salary =
+        r.basic_salary !== undefined && String(r.basic_salary).trim() !== ""
+          ? Number(r.basic_salary)
+          : null;
 
       const wage_tier_id =
         r.wage_tier_id !== undefined && String(r.wage_tier_id).trim() !== ""
@@ -546,6 +564,7 @@ router.post("/import/preview", upload.single("file"), async (req, res) => {
           employment_start: employment_start || "",
           is_active: is_active === "__INVALID__" ? "" : (is_active ?? ""),
           wage_tier_id,
+          basic_salary: basic_salary ?? "",
           field1: field1 || "",
           error: !worker_code ? "worker_code required" : "worker_name required",
         });
@@ -565,6 +584,7 @@ router.post("/import/preview", upload.single("file"), async (req, res) => {
           employment_start: employment_start || "",
           is_active: "",
           wage_tier_id,
+          basic_salary: basic_salary ?? "",
           field1: field1 || "",
           error: "is_active invalid (use 1/0, yes/no)",
         });
@@ -586,20 +606,21 @@ router.post("/import/preview", upload.single("file"), async (req, res) => {
       if (action === "INSERT") willInsert++;
       else willUpdate++;
 
-      preview.push({
-        row: rowNo,
-        action,
-        worker_code,
-        worker_name,
-        worker_english_name: worker_english_name || "",
-        passport_no: passport_no || "",
-        nationality: nationality || "",
-        employment_start: employment_start || "",
-        is_active: is_active ?? "",
-        wage_tier_id,
-        field1: field1 || "",
-        error: "",
-      });
+        preview.push({
+          row: rowNo,
+          action,
+          worker_code,
+          worker_name,
+          worker_english_name: worker_english_name || "",
+          passport_no: passport_no || "",
+          nationality: nationality || "",
+          employment_start: employment_start || "",
+          is_active: is_active ?? "",
+          wage_tier_id,
+          basic_salary: basic_salary ?? "",
+          field1: field1 || "",
+          error: "",
+        });
     }
 
     return res.json({
@@ -620,11 +641,11 @@ router.post("/import/preview", upload.single("file"), async (req, res) => {
 
 router.get("/template.csv", (req, res) => {
   const header =
-    "worker_code,worker_name,worker_english_name,passport_no,nationality,employment_start,is_active,wage_tier_id,field1";
+    "worker_code,worker_name,worker_english_name,passport_no,nationality,employment_start,is_active,wage_tier_id,basic_salary,field1";
 
-  const sample1 = "W001,张三,Zhang San,A11513,China,,1,1,";
-  const sample2 = "W002,李四,Li Si,E15613,China,,1,,";
-  const sample3 = "W003,Alice,Ali,K156123,Indo,,1,,";
+  const sample1 = "W001,张三,Zhang San,A11513,China,,1,1,2000,";
+  const sample2 = "W002,李四,Li Si,E15613,China,,1,,1500,";
+  const sample3 = "W003,Alice,Ali,K156123,Indo,,1,,0,";
 
   const csv = "\ufeff" + [header, sample1, sample2, sample3].join("\n") + "\n";
 

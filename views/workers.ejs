@@ -104,6 +104,7 @@
                     <th scope="col">Nationality</th>
                     <th scope="col">Start Date</th>
                     <th scope="col">Wage Tier</th>
+                    <th scope="col">Basic Salary</th>
                     <th scope="col">Active</th>
                     <th scope="col">Note</th>
                     <th scope="col" class="text-end">Actions</th>
@@ -114,7 +115,7 @@
 
             <tbody id="workersBody">
               <tr>
-                <td colspan="10" class="text-center text-muted py-5">
+                <td colspan="11" class="text-center text-muted py-5">
                   <div class="spinner-border spinner-border-sm me-2 text-primary" role="status">
                     <span class="visually-hidden">Loading...</span>
                   </div>
@@ -196,7 +197,12 @@
                 <select id="wageTierId" class="form-select"></select>
               </div>
 
-              <div class="col-md-8">
+              <div class="col-md-4">
+                <label class="form-label">Basic Salary</label>
+                <input type="number" id="basicSalary" class="form-control" step="0.01" placeholder="e.g. 1500" />
+              </div>
+
+              <div class="col-md-4">
                 <label class="form-label">Note</label>
                 <input type="text" id="field1" class="form-control" />
               </div>

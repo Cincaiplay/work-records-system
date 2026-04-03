@@ -209,7 +209,8 @@ async function getWorkerByIdPg({ companyId, workerId }) {
   try {
     const r = await db.query(
       `SELECT id, worker_code,
-              COALESCE(worker_name, worker_english_name, '') AS worker_name
+              COALESCE(worker_name, worker_english_name, '') AS worker_name,
+              basic_salary
        FROM workers
        WHERE id = $1 AND company_id = $2`,
       [workerId, companyId]
@@ -1678,35 +1679,6 @@ async function queryWorkerPayslipLinesGrouped({
   return r.rows || [];
 }
 
-async function queryWorkerPayslipJobNo2WageTotal({
-  companyId,
-  workerId,
-  start,
-  end,
-  payFilter,
-  jobNoFilter,
-}) {
-  const paySql = payWhereSql(payFilter);       // uses alias we
-  const jobNoSql = jobNoWhereSql(jobNoFilter); // uses alias we
-
-  const sql = `
-    SELECT
-      SUM(COALESCE(wej.wage_total, wej.pay, 0)) AS total_wage
-    FROM work_entries we
-    JOIN work_entry_jobs wej ON wej.work_entry_id = we.id
-    WHERE we.company_id = $1
-      AND we.worker_id = $2
-      AND we.work_date::date >= $3::date
-      AND we.work_date::date <= $4::date
-      AND TRIM(COALESCE(we.job_no2,'')) <> ''
-      ${paySql}
-      ${jobNoSql}
-  `;
-
-  const r = await db.query(sql, [companyId, workerId, start, end]);
-  return num(r.rows?.[0]?.total_wage);
-}
-
 router.get("/worker-payslip", async (req, res) => {
   try {
     const companyId = Number(req.query.companyId || 1);
@@ -1865,14 +1837,7 @@ router.get("/worker-payslip/pdf", async (req, res) => {
         { total_hours: 0, total_fee: 0, total_wage: 0 }
       );
 
-      const jobNo2WageTotal = await queryWorkerPayslipJobNo2WageTotal({
-        companyId,
-        workerId,
-        start,
-        end,
-        payFilter,
-        jobNoFilter,
-      });
+      const basicSalary = num(worker.basic_salary);
 
       if (!isFirstPage) doc.addPage();
 
@@ -2012,7 +1977,7 @@ router.get("/worker-payslip/pdf", async (req, res) => {
         width: leftW,
         align: "left",
       });
-      doc.text(t(lang, `amounting to RM ${fmt2(jobNo2WageTotal)}`, `金额：RM ${fmt2(jobNo2WageTotal)}`), leftX, blockY + 28, {
+      doc.text(t(lang, `amounting to RM ${fmt2(basicSalary)}`, `金额：RM ${fmt2(basicSalary)}`), leftX, blockY + 28, {
         width: leftW,
         align: "left",
       });

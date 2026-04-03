@@ -92,6 +92,12 @@ function formatDateForTable(v) {
   return s;
 }
 
+function formatMoney(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "-";
+  return n.toFixed(2);
+}
+
 function renderWorkersTable() {
   const tbody = document.getElementById("workersBody");
   const data = getCurrentData();
@@ -108,7 +114,7 @@ function renderWorkersTable() {
   if (!pageItems.length) {
     tbody.innerHTML = `
       <tr>
-        <td colspan="10" class="text-center text-muted py-4">No workers found.</td>
+        <td colspan="11" class="text-center text-muted py-4">No workers found.</td>
       </tr>`;
   } else {
     pageItems.forEach(w => {
@@ -121,6 +127,7 @@ function renderWorkersTable() {
         <td>${w.nationality || "-"}</td>
         <td>${formatDateForTable(w.employment_start)}</td>
         <td>${w.wage_tier_name || "-"}</td>
+        <td>${formatMoney(w.basic_salary)}</td>
         <td>${w.is_active ? "Yes" : "No"}</td>
         <td>${w.field1 || "-"}</td>
         <td class="text-end">
@@ -158,6 +165,10 @@ window.openEditModal = function (id) {
   document.getElementById("nationality").value = w.nationality || "";
   document.getElementById("employmentStart").value = normalizeDateForInput(w.employment_start);
   document.getElementById("field1").value = w.field1 || "";
+  const basicSalaryInput = document.getElementById("basicSalary");
+  if (basicSalaryInput) {
+    basicSalaryInput.value = w.basic_salary ?? "";
+  }
 
   // Active flag (NEW UI field)
   const isActiveSel = document.getElementById("isActive");
@@ -178,6 +189,9 @@ window.openCreateModal = function () {
   const sel = document.getElementById("wageTierId");
   if (sel) sel.value = "";
 
+  const basicSalaryInput = document.getElementById("basicSalary");
+  if (basicSalaryInput) basicSalaryInput.value = "";
+
   workerModal.show();
 };
 
@@ -185,6 +199,10 @@ window.saveWorker = function () {
   const id = document.getElementById("workerId").value.trim();
 
   const wageTierId = document.getElementById("wageTierId")?.value || "";
+  const basicSalaryRaw = document.getElementById("basicSalary")?.value ?? "";
+  const basicSalaryTrim = String(basicSalaryRaw).trim();
+  const basicSalaryNum = basicSalaryTrim === "" ? null : Number(basicSalaryTrim);
+  const basicSalary = Number.isFinite(basicSalaryNum) ? basicSalaryNum : null;
 
   const payload = {
     companyId,
@@ -197,6 +215,7 @@ window.saveWorker = function () {
     field1: document.getElementById("field1").value,
     is_active: document.getElementById("isActive").value === "1" ? 1 : 0,
     wage_tier_id: wageTierId ? Number(wageTierId) : null,
+    basic_salary: basicSalary,
     };
 
 
