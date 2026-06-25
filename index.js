@@ -93,6 +93,9 @@ app.use((req, res, next) => {
 app.set("view engine", "ejs");
 app.set("views", path.join(__dirname, "views"));
 app.use(express.static(path.join(__dirname, "public")));
+app.use("/vendor/bootstrap", express.static(path.join(__dirname, "node_modules/bootstrap/dist")));
+app.use("/vendor/bootstrap-icons", express.static(path.join(__dirname, "node_modules/bootstrap-icons/font")));
+app.use("/vendor/handsontable", express.static(path.join(__dirname, "node_modules/handsontable/dist")));
 
 // --- routes ---
 app.use(authRoutes);

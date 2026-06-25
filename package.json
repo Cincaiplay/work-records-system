@@ -16,6 +16,8 @@
   "description": "",
   "dependencies": {
     "bcrypt": "^6.0.0",
+    "bootstrap": "5.3.3",
+    "bootstrap-icons": "1.11.3",
     "connect-pg-simple": "^10.0.0",
     "cors": "^2.8.5",
     "csv-parse": "^6.1.0",
@@ -23,6 +25,7 @@
     "ejs": "^3.1.10",
     "express": "^5.2.1",
     "express-session": "^1.18.2",
+    "handsontable": "14.3.0",
     "multer": "^2.0.2",
     "pdfkit": "^0.17.2",
     "pg": "^8.17.1"
